@@ -44,17 +44,6 @@ enum Commands {
         #[arg(short = 'a', long)]
         analyze: Option<String>,
     },
-
-    /// Show statistics for a field
-    Stats {
-        /// Dataset name
-        #[arg(short, long)]
-        dataset: String,
-
-        /// Field name
-        #[arg(short, long)]
-        field: String,
-    },
 }
 
 fn main() -> anyhow::Result<()> {
@@ -96,11 +85,6 @@ fn main() -> anyhow::Result<()> {
                     println!("Could not compute statistics for field '{}'", field);
                 }
             }
-        }
-
-        Commands::Stats { dataset: _, field: _ } => {
-            println!("Note: This command requires a dataset to be loaded first.");
-            println!("Use 'csv' or 'json' commands to load data.");
         }
     }
 

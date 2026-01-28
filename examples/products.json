@@ -1,0 +1,32 @@
+[
+  {
+    "product": "Laptop",
+    "price": 999.99,
+    "quantity": 15,
+    "category": "Electronics"
+  },
+  {
+    "product": "Mouse",
+    "price": 29.99,
+    "quantity": 50,
+    "category": "Electronics"
+  },
+  {
+    "product": "Keyboard",
+    "price": 79.99,
+    "quantity": 30,
+    "category": "Electronics"
+  },
+  {
+    "product": "Monitor",
+    "price": 299.99,
+    "quantity": 20,
+    "category": "Electronics"
+  },
+  {
+    "product": "Desk Chair",
+    "price": 199.99,
+    "quantity": 12,
+    "category": "Furniture"
+  }
+]

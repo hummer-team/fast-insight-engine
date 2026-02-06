@@ -1,5 +1,6 @@
 /// ML algorithm core modules
 pub mod feature;
+pub mod knn_kdtree;
 pub mod model;
 
 // Re-export commonly used functions

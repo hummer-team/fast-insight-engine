@@ -197,10 +197,12 @@ mod tests {
     fn test_build_anomaly_result_length_mismatch() {
         let result = build_anomaly_result(vec![1, 2], vec![0.5], vec![false, true]);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("must have same length"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("must have same length")
+        );
     }
 
     #[test]

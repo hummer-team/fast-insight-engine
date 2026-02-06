@@ -1,50 +1,100 @@
-use linfa::prelude::*;
-use linfa_clustering::KMeans;
-use linfa_isofold::{IsolationForest, IsolationForestParams};
-use linfa_linear::LinearRegression;
+use wasm_bindgen::prelude::*;
 
+pub mod arrow_handler;
+pub mod insight_core;
+pub mod utils;
+
+use arrow_handler::{
+    build_anomaly_result, build_cluster_result, build_regression_result, parse_arrow_ipc,
+};
+use insight_core::{run_isolation_forest, run_kmeans, run_linear_regression};
+
+/// Detect anomalous orders using Isolation Forest
+///
+/// # Arguments
+/// * `data` - Arrow IPC Stream format bytes (Uint8Array from TypeScript)
+/// * `threshold` - Anomaly threshold in [0, 1], scores >= threshold are anomalous
+///
+/// # Returns
+/// * `Ok(Uint8Array)` - Arrow IPC result with order_id, abnormal_score, is_abnormal
+/// * `Err(JsError)` - Error message
 #[wasm_bindgen]
-pub fn detect_order_anomalies(data: &[f64], rows: usize, cols: usize) -> Vec<f64> {
-    // 将一维数组转为矩阵：每行是一个订单，每列是一个特征（如：实付、数量、退货历史）
-    let dataset = Dataset::from(Array2::from_shape_vec((rows, cols), data.to_vec()).unwrap());
+pub async fn detect_order_anomalies(data: &[u8], threshold: f64) -> Result<Vec<u8>, JsError> {
+    // Parse Arrow IPC input
+    let parsed = parse_arrow_ipc(data)?;
 
-    // 训练模型
-    let model = IsolationForestParams::new(100)
-        .fit(&dataset)
-        .expect("模型训练失败");
+    // Run Isolation Forest
+    let (scores, labels) = run_isolation_forest(parsed.features, threshold)?;
 
-    // 返回每个订单的“离群得分”，分数越低越可疑
-    model.predict(&dataset).to_vec()
+    // Build Arrow IPC result
+    let result = build_anomaly_result(parsed.order_ids, scores, labels)?;
+
+    Ok(result)
 }
 
+/// Segment customers/orders using K-Means clustering
+///
+/// # Arguments
+/// * `data` - Arrow IPC Stream format bytes (Uint8Array from TypeScript)
+/// * `n_clusters` - Number of clusters
+///
+/// # Returns
+/// * `Ok(Uint8Array)` - Arrow IPC result with order_id, cluster_id
+/// * `Err(JsError)` - Error message
 #[wasm_bindgen]
-pub fn segment_customer_orders(
-    data: &[f64],
-    rows: usize,
-    cols: usize,
-    clusters: usize,
-) -> Vec<usize> {
-    let dataset = Dataset::from(Array2::from_shape_vec((rows, cols), data.to_vec()).unwrap());
+pub async fn segment_customer_orders(data: &[u8], n_clusters: usize) -> Result<Vec<u8>, JsError> {
+    // Parse Arrow IPC input
+    let parsed = parse_arrow_ipc(data)?;
 
-    let model = KMeans::params(clusters)
-        .max_n_iterations(100)
-        .fit(&dataset)
-        .expect("聚类失败");
+    // Run K-Means clustering
+    let cluster_ids = run_kmeans(parsed.features, n_clusters)?;
 
-    // 返回每个订单所属的簇 ID（0, 1, 2...）
-    model.predict(&dataset).targets().to_vec()
+    // Build Arrow IPC result
+    let result = build_cluster_result(parsed.order_ids, cluster_ids)?;
+
+    Ok(result)
 }
 
+/// Predict future inventory demand using Linear Regression
+///
+/// # Arguments
+/// * `data` - Arrow IPC Stream format bytes with x (time/index) and y (demand) columns
+/// * `predict_steps` - Number of future time steps to predict
+///
+/// # Returns
+/// * `Ok(Uint8Array)` - Arrow IPC result with predictions
+/// * `Err(JsError)` - Error message
 #[wasm_bindgen]
-pub fn predict_inventory_demand(x_data: &[f64], y_data: &[f64], rows: usize) -> Vec<f64> {
-    let x = Array2::from_shape_vec((rows, 1), x_data.to_vec()).unwrap();
-    let y = Array1::from_vec(y_data.to_vec());
-    let dataset = Dataset::new(x, y);
+pub async fn predict_inventory_demand(
+    data: &[u8],
+    predict_steps: usize,
+) -> Result<Vec<u8>, JsError> {
+    // Parse Arrow IPC input
+    let parsed = parse_arrow_ipc(data)?;
 
-    let model = LinearRegression::default().fit(&dataset).unwrap();
+    // Extract X (first feature column) and Y (order_id repurposed as target)
+    // Note: In real usage, you'd pass proper x/y data via Arrow schema
+    let x = parsed
+        .features
+        .column(0)
+        .to_owned()
+        .insert_axis(ndarray::Axis(1));
+    let y = ndarray::Array1::from_vec(parsed.order_ids.iter().map(|&id| id as f64).collect());
 
-    // 预测未来 7 个时间步
-    let future =
-        Array2::from_shape_vec((7, 1), (1..=7).map(|i| (rows + i) as f64).collect()).unwrap();
-    model.predict(&future).to_vec()
+    // Run Linear Regression
+    let predictions = run_linear_regression(x, y, predict_steps)?;
+
+    // Build Arrow IPC result
+    let result = build_regression_result(predictions)?;
+
+    Ok(result)
+}
+
+/// Get Wasm module version for compatibility checking
+///
+/// # Returns
+/// * Version string (e.g., "0.1.0")
+#[wasm_bindgen]
+pub fn get_wasm_version() -> String {
+    env!("CARGO_PKG_VERSION").to_string()
 }

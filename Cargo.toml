@@ -8,10 +8,12 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 wasm-bindgen = "0.2.108"
+wasm-bindgen-futures = "0.4"
 js-sys = "0.3.85"
-
-ndarray = { version = "0.17.2", features = ["serde"] }
-
-linfa = { version = "0.8.1", features = ["isofit", "clustering", "linear"] }
-
-getrandom = { version = "0.3.4", features = ["wasm_js"] } # Wasm 环境下随机数支持
+ndarray = { version = "0.16.1", features = ["serde"] }
+linfa = "0.8.1"
+linfa-clustering = "0.8.1"
+linfa-linear = "0.8.1"
+extended-isolation-forest = "0.2.3"
+getrandom = { version = "0.3.4", features = ["wasm_js"] }
+arrow = "57.2.0"

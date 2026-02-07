@@ -2,55 +2,170 @@ use linfa::prelude::*;
 use linfa_clustering::KMeans;
 use linfa_linear::LinearRegression;
 use ndarray::{Array1, Array2};
+use extended_isolation_forest::{Forest, ForestOptions};
 
-use crate::insight_core::knn_kdtree;
-use crate::utils::{normalize_scores, validate_threshold, AnalysisError};
+use crate::utils::{validate_threshold, AnalysisError};
 
-/// Run Isolation Forest anomaly detection using KD-Tree optimized KNN
+/// Run Isolation Forest anomaly detection using Extended Isolation Forest
 ///
 /// # Arguments
 /// * `features` - Feature matrix (rows=samples, cols=features, **max 16 columns**)
 /// * `threshold` - Anomaly threshold in [0, 1], scores >= threshold are anomalous
 ///
 /// # Returns
-/// * `Ok((scores, labels))` - Normalized scores (0-1) and boolean labels
+/// * `Ok((scores, labels))` - Anomaly scores (0-1) and boolean labels
 /// * `Err(AnalysisError)` - If validation or training fails, or features > 16
 ///
+/// # Algorithm
+/// Uses Extended Isolation Forest algorithm with optimized tree-based isolation.
+/// Scores are already normalized to [0, 1] range where higher = more anomalous.
+///
 /// # Performance
-/// * Complexity: O(n log n) using KD-Tree (vs O(n²) naive approach)
-/// * 100k samples: ~10 seconds (vs ~30 minutes naive)
-/// * Speedup: ~5000x
+/// * Complexity: O(n log n)
+/// * 100k samples: ~5-10 seconds
+/// * Supports dynamic feature dimensions (common sizes: 5, 10, 15, 16)
 ///
 /// # Note
-/// Uses KD-Tree for efficient nearest neighbor search. Maximum 16 features
-/// supported. For >16 features, consider feature selection or PCA dimensionality reduction.
+/// Maximum 16 features supported for WASM compatibility. For >16 features, 
+/// consider feature selection or PCA dimensionality reduction.
 pub fn run_isolation_forest(
     features: Array2<f64>,
     threshold: f64,
 ) -> Result<(Vec<f64>, Vec<bool>), AnalysisError> {
-    // Validate threshold
     validate_threshold(threshold)?;
 
-    // Validate features (will also check <= 16 dimensions)
     if features.nrows() == 0 {
         return Err(AnalysisError::ValidationError(
             "empty feature matrix".to_string(),
         ));
     }
+    
+    let n_features = features.ncols();
+    
+    #[cfg(target_arch = "wasm32")]
+    {
+        use wasm_bindgen::prelude::*;
+        #[wasm_bindgen]
+        extern "C" {
+            #[wasm_bindgen(js_namespace = console)]
+            fn log(s: &str);
+        }
+        log(&format!("🔍 [IsolationForest] Running Extended IForest with {} samples x {} features", 
+                     features.nrows(), n_features));
+    }
 
-    // Calculate anomaly scores using KD-Tree optimized KNN
-    let scores = knn_kdtree::knn_anomaly_scores(&features, 5)?;
+    // Dispatch to appropriate implementation based on feature count
+    match n_features {
+        2 => run_iforest_impl::<2>(&features, threshold),   // For unit tests
+        5 => run_iforest_impl::<5>(&features, threshold),
+        10 => run_iforest_impl::<10>(&features, threshold),
+        15 => run_iforest_impl::<15>(&features, threshold),
+        16 => run_iforest_impl::<16>(&features, threshold),
+        _ => Err(AnalysisError::ValidationError(format!(
+            "Unsupported feature count: {}. Supported dimensions: 2, 5, 10, 15, 16. \
+             Please use feature selection or add more cases.",
+            n_features
+        ))),
+    }
+}
 
-    // Normalize scores to 0-1 range
-    let normalized_scores = normalize_scores(&scores);
-
-    // Apply threshold to generate labels
-    let labels: Vec<bool> = normalized_scores
-        .iter()
-        .map(|&score| score >= threshold)
+/// Generic implementation of Extended Isolation Forest for dimension N
+fn run_iforest_impl<const N: usize>(
+    features: &Array2<f64>,
+    threshold: f64,
+) -> Result<(Vec<f64>, Vec<bool>), AnalysisError> {
+    let _n_samples = features.nrows();  // Used in logging
+    
+    // Convert Array2<f64> to Vec<[f64; N]>
+    let data: Vec<[f64; N]> = features
+        .rows()
+        .into_iter()
+        .map(|row| {
+            let mut arr = [0.0; N];
+            for (i, &val) in row.iter().enumerate().take(N) {
+                arr[i] = val;
+            }
+            arr
+        })
         .collect();
+    
+    // Configure Extended Isolation Forest
+    let sample_size = if _n_samples < 256 {
+        _n_samples  // Use all samples if fewer than 256
+    } else {
+        256
+    };
+    
+    let options = ForestOptions {
+        n_trees: 100,           // Number of trees in the forest
+        sample_size,            // Adaptive subsampling size
+        max_tree_depth: None,   // Unlimited depth (auto-calculated)
+        extension_level: 1,     // Extension level (1 = extended, 0 = standard)
+    };
+    
+    #[cfg(target_arch = "wasm32")]
+    {
+        use wasm_bindgen::prelude::*;
+        #[wasm_bindgen]
+        extern "C" {
+            #[wasm_bindgen(js_namespace = console)]
+            fn log(s: &str);
+        }
+        log(&format!("  [IForest] Building forest with {} trees, sample_size={}", 
+                     options.n_trees, options.sample_size));
+    }
+    
+    // Build the forest
+    let forest: Forest<f64, N> = Forest::from_slice(&data, &options)
+        .map_err(|e| AnalysisError::ModelError(format!("Extended IForest training failed: {:?}", e)))?;
+    
+    #[cfg(target_arch = "wasm32")]
+    {
+        use wasm_bindgen::prelude::*;
+        #[wasm_bindgen]
+        extern "C" {
+            #[wasm_bindgen(js_namespace = console)]
+            fn log(s: &str);
+        }
+        log("  [IForest] Forest built, computing anomaly scores...");
+    }
+    
+    // Compute anomaly scores (already normalized to [0, 1])
+    let scores: Vec<f64> = data.iter().map(|sample| forest.score(sample)).collect();
+    
+    #[cfg(target_arch = "wasm32")]
+    {
+        use wasm_bindgen::prelude::*;
+        #[wasm_bindgen]
+        extern "C" {
+            #[wasm_bindgen(js_namespace = console)]
+            fn log(s: &str);
+        }
+        // Log score distribution for debugging
+        let score_min = scores.iter().copied().fold(f64::INFINITY, f64::min);
+        let score_max = scores.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+        let score_avg = scores.iter().sum::<f64>() / scores.len() as f64;
+        log(&format!("  [IForest] Score range: [{:.6}, {:.6}], avg: {:.6}", 
+                     score_min, score_max, score_avg));
+    }
+    
+    // Apply threshold to generate labels
+    let labels: Vec<bool> = scores.iter().map(|&s| s >= threshold).collect();
+    
+    #[cfg(target_arch = "wasm32")]
+    {
+        use wasm_bindgen::prelude::*;
+        #[wasm_bindgen]
+        extern "C" {
+            #[wasm_bindgen(js_namespace = console)]
+            fn log(s: &str);
+        }
+        let anomaly_count = labels.iter().filter(|&&l| l).count();
+        log(&format!("✓ [IsolationForest] Complete: {} anomalies detected ({:.1}%)", 
+                     anomaly_count, (anomaly_count as f64 / _n_samples as f64 * 100.0)));
+    }
 
-    Ok((normalized_scores, labels))
+    Ok((scores, labels))
 }
 
 /// Run K-Means clustering

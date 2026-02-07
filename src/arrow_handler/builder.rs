@@ -1,4 +1,4 @@
-use arrow::array::{ArrayRef, BooleanArray, Float64Array, Int64Array, UInt64Array};
+use arrow::array::{ArrayRef, BooleanArray, Float64Array, StringArray, UInt64Array};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::ipc::writer::StreamWriter;
 use arrow::record_batch::RecordBatch;
@@ -9,7 +9,7 @@ use crate::utils::AnalysisError;
 /// Build Arrow IPC result for anomaly detection
 ///
 /// # Arguments
-/// * `order_ids` - Original order IDs
+/// * `order_ids` - Original order IDs (String type for business compatibility)
 /// * `scores` - Anomaly scores (0-1 range, higher = more anomalous)
 /// * `labels` - Binary anomaly labels (true = anomalous)
 ///
@@ -17,7 +17,7 @@ use crate::utils::AnalysisError;
 /// * `Ok(Vec<u8>)` - Arrow IPC Stream format bytes
 /// * `Err(AnalysisError)` - If building fails
 pub fn build_anomaly_result(
-    order_ids: Vec<i64>,
+    order_ids: Vec<String>,
     scores: Vec<f64>,
     labels: Vec<bool>,
 ) -> Result<Vec<u8>, AnalysisError> {
@@ -29,13 +29,13 @@ pub fn build_anomaly_result(
 
     // Define schema (order fixed: order_id, abnormal_score, is_abnormal)
     let schema = Arc::new(Schema::new(vec![
-        Field::new("order_id", DataType::Int64, false),
+        Field::new("order_id", DataType::Utf8, false),
         Field::new("abnormal_score", DataType::Float64, false),
         Field::new("is_abnormal", DataType::Boolean, false),
     ]));
 
     // Build arrays
-    let order_id_array = Arc::new(Int64Array::from(order_ids)) as ArrayRef;
+    let order_id_array = Arc::new(StringArray::from(order_ids)) as ArrayRef;
     let score_array = Arc::new(Float64Array::from(scores)) as ArrayRef;
     let label_array = Arc::new(BooleanArray::from(labels)) as ArrayRef;
 
@@ -52,14 +52,14 @@ pub fn build_anomaly_result(
 /// Build Arrow IPC result for clustering
 ///
 /// # Arguments
-/// * `order_ids` - Original order IDs
+/// * `order_ids` - Original order IDs (String type for business compatibility)
 /// * `cluster_ids` - Cluster assignments (0, 1, 2, ...)
 ///
 /// # Returns
 /// * `Ok(Vec<u8>)` - Arrow IPC Stream format bytes
 /// * `Err(AnalysisError)` - If building fails
 pub fn build_cluster_result(
-    order_ids: Vec<i64>,
+    order_ids: Vec<String>,
     cluster_ids: Vec<usize>,
 ) -> Result<Vec<u8>, AnalysisError> {
     if order_ids.len() != cluster_ids.len() {
@@ -70,12 +70,12 @@ pub fn build_cluster_result(
 
     // Define schema
     let schema = Arc::new(Schema::new(vec![
-        Field::new("order_id", DataType::Int64, false),
+        Field::new("order_id", DataType::Utf8, false),
         Field::new("cluster_id", DataType::UInt64, false),
     ]));
 
     // Build arrays
-    let order_id_array = Arc::new(Int64Array::from(order_ids)) as ArrayRef;
+    let order_id_array = Arc::new(StringArray::from(order_ids)) as ArrayRef;
     let cluster_array = Arc::new(UInt64Array::from(
         cluster_ids.iter().map(|&c| c as u64).collect::<Vec<_>>(),
     )) as ArrayRef;
@@ -144,7 +144,7 @@ mod tests {
 
     #[test]
     fn test_build_anomaly_result() {
-        let order_ids = vec![1, 2, 3];
+        let order_ids = vec!["ORD001".to_string(), "ORD002".to_string(), "ORD003".to_string()];
         let scores = vec![0.1, 0.5, 0.9];
         let labels = vec![false, false, true];
 
@@ -163,7 +163,7 @@ mod tests {
 
     #[test]
     fn test_build_cluster_result() {
-        let order_ids = vec![1, 2, 3];
+        let order_ids = vec!["ORD001".to_string(), "ORD002".to_string(), "ORD003".to_string()];
         let cluster_ids = vec![0, 1, 0];
 
         let result = build_cluster_result(order_ids, cluster_ids).unwrap();
@@ -195,7 +195,11 @@ mod tests {
 
     #[test]
     fn test_build_anomaly_result_length_mismatch() {
-        let result = build_anomaly_result(vec![1, 2], vec![0.5], vec![false, true]);
+        let result = build_anomaly_result(
+            vec!["ORD001".to_string(), "ORD002".to_string()],
+            vec![0.5],
+            vec![false, true],
+        );
         assert!(result.is_err());
         assert!(
             result

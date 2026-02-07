@@ -17,7 +17,8 @@ linfa-linear = "0.8.1"
 smartcore = { version = "0.4.9", features = ["ndarray-bindings"] }
 getrandom = { version = "0.2", features = ["js"] }
 arrow = "57.2.0"
-kiddo = "4.2"
+extended-isolation-forest = "0.2.3"
+# kiddo = "4.2"  # Disabled: crashes in WASM with large datasets
 wgpu = "0.20"
 bytemuck = { version = "1.14", features = ["derive"] }
 pollster = "0.3"

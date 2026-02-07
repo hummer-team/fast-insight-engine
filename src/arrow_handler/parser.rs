@@ -1,4 +1,4 @@
-use arrow::array::{ArrayRef, Float64Array, Int64Array};
+use arrow::array::{ArrayRef, Float64Array, StringArray};
 use arrow::datatypes::{DataType, Schema};
 use arrow::ipc::reader::StreamReader;
 use ndarray::Array2;
@@ -10,7 +10,7 @@ use crate::utils::AnalysisError;
 /// Parsed data from Arrow IPC format
 #[derive(Debug)]
 pub struct ParsedData {
-    pub order_ids: Vec<i64>,
+    pub order_ids: Vec<String>,
     pub features: Array2<f64>,
 }
 
@@ -33,7 +33,7 @@ pub fn parse_arrow_ipc(data: &[u8]) -> Result<ParsedData, AnalysisError> {
         .map_err(|e| AnalysisError::ArrowError(format!("failed to create StreamReader: {}", e)))?;
 
     // Read all batches
-    let mut all_order_ids: Vec<i64> = Vec::new();
+    let mut all_order_ids: Vec<String> = Vec::new();
     let mut all_feature_rows: Vec<Vec<f64>> = Vec::new();
     let mut feature_count: Option<usize> = None;
 
@@ -51,13 +51,13 @@ pub fn parse_arrow_ipc(data: &[u8]) -> Result<ParsedData, AnalysisError> {
         let order_id_col = batch
             .column(0)
             .as_any()
-            .downcast_ref::<Int64Array>()
+            .downcast_ref::<StringArray>()
             .ok_or_else(|| {
-                AnalysisError::ArrowError("order_id column is not Int64Array".to_string())
+                AnalysisError::ArrowError("order_id column is not StringArray".to_string())
             })?;
 
         for i in 0..batch.num_rows() {
-            all_order_ids.push(order_id_col.value(i));
+            all_order_ids.push(order_id_col.value(i).to_string());
         }
 
         // Extract feature columns (all columns except first)
@@ -115,9 +115,9 @@ fn validate_schema(schema: Arc<Schema>) -> Result<(), AnalysisError> {
         )));
     }
 
-    if !matches!(first_field.data_type(), DataType::Int64) {
+    if !matches!(first_field.data_type(), DataType::Utf8) {
         return Err(AnalysisError::ArrowError(format!(
-            "order_id must be Int64, got {:?}",
+            "order_id must be Utf8 (String), got {:?}",
             first_field.data_type()
         )));
     }
@@ -156,20 +156,20 @@ fn extract_float64_value(array: &ArrayRef, index: usize) -> Result<f64, Analysis
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{Float64Array, Int64Array};
+    use arrow::array::{Float64Array, StringArray};
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::ipc::writer::StreamWriter;
     use arrow::record_batch::RecordBatch;
     use std::sync::Arc;
 
     fn create_test_arrow_data(
-        order_ids: Vec<i64>,
+        order_ids: Vec<String>,
         features: Vec<Vec<f64>>,
     ) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
         let num_features = features.first().map(|f| f.len()).unwrap_or(0);
 
         // Build schema
-        let mut fields = vec![Field::new("order_id", DataType::Int64, false)];
+        let mut fields = vec![Field::new("order_id", DataType::Utf8, false)];
         for i in 0..num_features {
             fields.push(Field::new(
                 &format!("feature_{}", i),
@@ -180,7 +180,7 @@ mod tests {
         let schema = Arc::new(Schema::new(fields));
 
         // Build arrays
-        let order_id_array = Arc::new(Int64Array::from(order_ids)) as ArrayRef;
+        let order_id_array = Arc::new(StringArray::from(order_ids)) as ArrayRef;
         let mut feature_arrays: Vec<ArrayRef> = Vec::new();
         for i in 0..num_features {
             let col_data: Vec<f64> = features.iter().map(|row| row[i]).collect();
@@ -205,7 +205,11 @@ mod tests {
 
     #[test]
     fn test_parse_arrow_ipc_normal() {
-        let order_ids = vec![1, 2, 3];
+        let order_ids = vec![
+            "ORD001".to_string(),
+            "ORD002".to_string(),
+            "ORD003".to_string(),
+        ];
         let features = vec![vec![1.0, 2.0], vec![3.0, 4.0], vec![5.0, 6.0]];
         let data = create_test_arrow_data(order_ids.clone(), features.clone()).unwrap();
 

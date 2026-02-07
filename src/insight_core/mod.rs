@@ -1,6 +1,6 @@
 /// ML algorithm core modules
 pub mod feature;
-pub mod knn_kdtree;
+// pub mod knn_kdtree;  // Disabled: replaced by extended-isolation-forest
 pub mod model;
 
 // Re-export commonly used functions

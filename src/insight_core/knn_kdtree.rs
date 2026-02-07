@@ -53,6 +53,17 @@ pub fn knn_anomaly_scores(features: &Array2<f64>, k: usize) -> Result<Vec<f64>, 
     }
 
     // Build KD-Tree: O(n log n)
+    #[cfg(target_arch = "wasm32")]
+    {
+        use wasm_bindgen::prelude::*;
+        #[wasm_bindgen]
+        extern "C" {
+            #[wasm_bindgen(js_namespace = console)]
+            fn log(s: &str);
+        }
+        log(&format!("🔍 [KNN] Building KD-Tree with {} samples x {} features (k={})", n_samples, n_features, effective_k));
+    }
+    
     // kiddo 4.2 API: KdTree<A, const K: usize> where A is scalar type
     let mut tree: KdTree<f64, MAX_FEATURES> = KdTree::new();
 
@@ -63,9 +74,43 @@ pub fn knn_anomaly_scores(features: &Array2<f64>, k: usize) -> Result<Vec<f64>, 
         }
         // kiddo 4.2 uses add() which modifies tree in-place
         tree.add(&point, i as u64);
+        
+        // Log progress every 5000 nodes
+        #[cfg(target_arch = "wasm32")]
+        if (i + 1) % 5000 == 0 {
+            use wasm_bindgen::prelude::*;
+            #[wasm_bindgen]
+            extern "C" {
+                #[wasm_bindgen(js_namespace = console)]
+                fn log(s: &str);
+            }
+            log(&format!("  [KNN] Built {} / {} nodes", i + 1, n_samples));
+        }
+    }
+    
+    #[cfg(target_arch = "wasm32")]
+    {
+        use wasm_bindgen::prelude::*;
+        #[wasm_bindgen]
+        extern "C" {
+            #[wasm_bindgen(js_namespace = console)]
+            fn log(s: &str);
+        }
+        log(&format!("✓ [KNN] KD-Tree built successfully"));
     }
 
     // Query k nearest neighbors for each point: O(n log n)
+    #[cfg(target_arch = "wasm32")]
+    {
+        use wasm_bindgen::prelude::*;
+        #[wasm_bindgen]
+        extern "C" {
+            #[wasm_bindgen(js_namespace = console)]
+            fn log(s: &str);
+        }
+        log(&format!("🔍 [KNN] Querying {} nearest neighbors for each sample...", effective_k));
+    }
+    
     let mut scores = Vec::with_capacity(n_samples);
 
     for i in 0..n_samples {
@@ -86,6 +131,29 @@ pub fn knn_anomaly_scores(features: &Array2<f64>, k: usize) -> Result<Vec<f64>, 
             / effective_k as f64;
 
         scores.push(avg_distance);
+        
+        // Log progress every 5000 queries
+        #[cfg(target_arch = "wasm32")]
+        if (i + 1) % 5000 == 0 {
+            use wasm_bindgen::prelude::*;
+            #[wasm_bindgen]
+            extern "C" {
+                #[wasm_bindgen(js_namespace = console)]
+                fn log(s: &str);
+            }
+            log(&format!("  [KNN] Queried {} / {} samples", i + 1, n_samples));
+        }
+    }
+    
+    #[cfg(target_arch = "wasm32")]
+    {
+        use wasm_bindgen::prelude::*;
+        #[wasm_bindgen]
+        extern "C" {
+            #[wasm_bindgen(js_namespace = console)]
+            fn log(s: &str);
+        }
+        log(&format!("✓ [KNN] Computed {} anomaly scores", scores.len()));
     }
 
     Ok(scores)

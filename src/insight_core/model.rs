@@ -1,10 +1,10 @@
+use extended_isolation_forest::{Forest, ForestOptions};
 use linfa::prelude::*;
 use linfa_clustering::KMeans;
 use linfa_linear::LinearRegression;
 use ndarray::{Array1, Array2};
-use extended_isolation_forest::{Forest, ForestOptions};
 
-use crate::utils::{validate_threshold, AnalysisError};
+use crate::utils::{AnalysisError, validate_threshold};
 
 /// Run Isolation Forest anomaly detection using Extended Isolation Forest
 ///
@@ -26,7 +26,7 @@ use crate::utils::{validate_threshold, AnalysisError};
 /// * Supports dynamic feature dimensions (common sizes: 5, 10, 15, 16)
 ///
 /// # Note
-/// Maximum 16 features supported for WASM compatibility. For >16 features, 
+/// Maximum 16 features supported for WASM compatibility. For >16 features,
 /// consider feature selection or PCA dimensionality reduction.
 pub fn run_isolation_forest(
     features: Array2<f64>,
@@ -39,9 +39,9 @@ pub fn run_isolation_forest(
             "empty feature matrix".to_string(),
         ));
     }
-    
+
     let n_features = features.ncols();
-    
+
     #[cfg(target_arch = "wasm32")]
     {
         use wasm_bindgen::prelude::*;
@@ -50,21 +50,25 @@ pub fn run_isolation_forest(
             #[wasm_bindgen(js_namespace = console)]
             fn log(s: &str);
         }
-        log(&format!("🔍 [IsolationForest] Running Extended IForest with {} samples x {} features", 
-                     features.nrows(), n_features));
+        log(&format!(
+            "🔍 [IsolationForest] Running Extended IForest with {} samples x {} features",
+            features.nrows(),
+            n_features
+        ));
     }
 
     // Dispatch to appropriate implementation based on feature count
     match n_features {
-        2 => run_iforest_impl::<2>(&features, threshold),   // For unit tests
+        2 => run_iforest_impl::<2>(&features, threshold), // For unit tests
         5 => run_iforest_impl::<5>(&features, threshold),
         7 => run_iforest_impl::<7>(&features, threshold),
         10 => run_iforest_impl::<10>(&features, threshold),
         11 => run_iforest_impl::<11>(&features, threshold),
+        13 => run_iforest_impl::<13>(&features, threshold),
         15 => run_iforest_impl::<15>(&features, threshold),
         16 => run_iforest_impl::<16>(&features, threshold),
         _ => Err(AnalysisError::ValidationError(format!(
-            "Unsupported feature count: {}. Supported dimensions: 2, 5, 7, 10, 11, 15, 16. \
+            "Unsupported feature count: {}. Supported dimensions: 2, 5, 7, 10, 11,13, 15, 16. \
              Please use feature selection or add more cases.",
             n_features
         ))),
@@ -76,8 +80,8 @@ fn run_iforest_impl<const N: usize>(
     features: &Array2<f64>,
     threshold: f64,
 ) -> Result<(Vec<f64>, Vec<bool>), AnalysisError> {
-    let _n_samples = features.nrows();  // Used in logging
-    
+    let _n_samples = features.nrows(); // Used in logging
+
     // Convert Array2<f64> to Vec<[f64; N]>
     let data: Vec<[f64; N]> = features
         .rows()
@@ -90,21 +94,21 @@ fn run_iforest_impl<const N: usize>(
             arr
         })
         .collect();
-    
+
     // Configure Extended Isolation Forest
     let sample_size = if _n_samples < 256 {
-        _n_samples  // Use all samples if fewer than 256
+        _n_samples // Use all samples if fewer than 256
     } else {
         256
     };
-    
+
     let options = ForestOptions {
-        n_trees: 100,           // Number of trees in the forest
-        sample_size,            // Adaptive subsampling size
-        max_tree_depth: None,   // Unlimited depth (auto-calculated)
-        extension_level: 1,     // Extension level (1 = extended, 0 = standard)
+        n_trees: 100,         // Number of trees in the forest
+        sample_size,          // Adaptive subsampling size
+        max_tree_depth: None, // Unlimited depth (auto-calculated)
+        extension_level: 1,   // Extension level (1 = extended, 0 = standard)
     };
-    
+
     #[cfg(target_arch = "wasm32")]
     {
         use wasm_bindgen::prelude::*;
@@ -113,14 +117,17 @@ fn run_iforest_impl<const N: usize>(
             #[wasm_bindgen(js_namespace = console)]
             fn log(s: &str);
         }
-        log(&format!("  [IForest] Building forest with {} trees, sample_size={}", 
-                     options.n_trees, options.sample_size));
+        log(&format!(
+            "  [IForest] Building forest with {} trees, sample_size={}",
+            options.n_trees, options.sample_size
+        ));
     }
-    
+
     // Build the forest
-    let forest: Forest<f64, N> = Forest::from_slice(&data, &options)
-        .map_err(|e| AnalysisError::ModelError(format!("Extended IForest training failed: {:?}", e)))?;
-    
+    let forest: Forest<f64, N> = Forest::from_slice(&data, &options).map_err(|e| {
+        AnalysisError::ModelError(format!("Extended IForest training failed: {:?}", e))
+    })?;
+
     #[cfg(target_arch = "wasm32")]
     {
         use wasm_bindgen::prelude::*;
@@ -131,10 +138,10 @@ fn run_iforest_impl<const N: usize>(
         }
         log("  [IForest] Forest built, computing anomaly scores...");
     }
-    
+
     // Compute anomaly scores (already normalized to [0, 1])
     let scores: Vec<f64> = data.iter().map(|sample| forest.score(sample)).collect();
-    
+
     #[cfg(target_arch = "wasm32")]
     {
         use wasm_bindgen::prelude::*;
@@ -147,13 +154,15 @@ fn run_iforest_impl<const N: usize>(
         let score_min = scores.iter().copied().fold(f64::INFINITY, f64::min);
         let score_max = scores.iter().copied().fold(f64::NEG_INFINITY, f64::max);
         let score_avg = scores.iter().sum::<f64>() / scores.len() as f64;
-        log(&format!("  [IForest] Score range: [{:.6}, {:.6}], avg: {:.6}", 
-                     score_min, score_max, score_avg));
+        log(&format!(
+            "  [IForest] Score range: [{:.6}, {:.6}], avg: {:.6}",
+            score_min, score_max, score_avg
+        ));
     }
-    
+
     // Apply threshold to generate labels
     let labels: Vec<bool> = scores.iter().map(|&s| s >= threshold).collect();
-    
+
     #[cfg(target_arch = "wasm32")]
     {
         use wasm_bindgen::prelude::*;
@@ -163,8 +172,11 @@ fn run_iforest_impl<const N: usize>(
             fn log(s: &str);
         }
         let anomaly_count = labels.iter().filter(|&&l| l).count();
-        log(&format!("✓ [IsolationForest] Complete: {} anomalies detected ({:.1}%)", 
-                     anomaly_count, (anomaly_count as f64 / _n_samples as f64 * 100.0)));
+        log(&format!(
+            "✓ [IsolationForest] Complete: {} anomalies detected ({:.1}%)",
+            anomaly_count,
+            (anomaly_count as f64 / _n_samples as f64 * 100.0)
+        ));
     }
 
     Ok((scores, labels))
@@ -264,11 +276,10 @@ pub fn run_linear_regression(
 
     // Generate future x values for prediction
     let last_x = x.nrows() as f64;
-    let future_x: Vec<f64> = (1..=predict_steps)
-        .map(|i| last_x + i as f64)
-        .collect();
-    let future_x_matrix = Array2::from_shape_vec((predict_steps, 1), future_x)
-        .map_err(|e| AnalysisError::ModelError(format!("failed to create prediction matrix: {}", e)))?;
+    let future_x: Vec<f64> = (1..=predict_steps).map(|i| last_x + i as f64).collect();
+    let future_x_matrix = Array2::from_shape_vec((predict_steps, 1), future_x).map_err(|e| {
+        AnalysisError::ModelError(format!("failed to create prediction matrix: {}", e))
+    })?;
 
     // Make predictions
     let predictions: Array1<f64> = model.predict(&future_x_matrix);
@@ -334,7 +345,7 @@ mod tests {
         }
         let features = Array2::from_shape_vec((10, 7), data).unwrap();
         let (scores, labels) = run_isolation_forest(features, 0.5).unwrap();
-        
+
         assert_eq!(scores.len(), 10);
         assert_eq!(labels.len(), 10);
     }
@@ -350,19 +361,14 @@ mod tests {
         }
         let features = Array2::from_shape_vec((10, 11), data).unwrap();
         let (scores, labels) = run_isolation_forest(features, 0.5).unwrap();
-        
+
         assert_eq!(scores.len(), 10);
         assert_eq!(labels.len(), 10);
     }
 
     #[test]
     fn test_run_kmeans_normal() {
-        let features = arr2(&[
-            [1.0, 1.0],
-            [1.5, 1.5],
-            [10.0, 10.0],
-            [10.5, 10.5],
-        ]);
+        let features = arr2(&[[1.0, 1.0], [1.5, 1.5], [10.0, 10.0], [10.5, 10.5]]);
         let cluster_ids = run_kmeans(features, 2).unwrap();
 
         assert_eq!(cluster_ids.len(), 4);

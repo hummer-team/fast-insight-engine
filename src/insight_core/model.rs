@@ -58,11 +58,13 @@ pub fn run_isolation_forest(
     match n_features {
         2 => run_iforest_impl::<2>(&features, threshold),   // For unit tests
         5 => run_iforest_impl::<5>(&features, threshold),
+        7 => run_iforest_impl::<7>(&features, threshold),
         10 => run_iforest_impl::<10>(&features, threshold),
+        11 => run_iforest_impl::<11>(&features, threshold),
         15 => run_iforest_impl::<15>(&features, threshold),
         16 => run_iforest_impl::<16>(&features, threshold),
         _ => Err(AnalysisError::ValidationError(format!(
-            "Unsupported feature count: {}. Supported dimensions: 2, 5, 10, 15, 16. \
+            "Unsupported feature count: {}. Supported dimensions: 2, 5, 7, 10, 11, 15, 16. \
              Please use feature selection or add more cases.",
             n_features
         ))),
@@ -319,6 +321,38 @@ mod tests {
     fn test_run_isolation_forest_empty() {
         let features = Array2::<f64>::zeros((0, 2));
         assert!(run_isolation_forest(features, 0.5).is_err());
+    }
+
+    #[test]
+    fn test_run_isolation_forest_7_features() {
+        // Test 7 dimensions
+        let mut data = vec![0.0; 70]; // 10 samples × 7 features
+        for i in 0..10 {
+            for j in 0..7 {
+                data[i * 7 + j] = (i as f64) + (j as f64 * 0.1);
+            }
+        }
+        let features = Array2::from_shape_vec((10, 7), data).unwrap();
+        let (scores, labels) = run_isolation_forest(features, 0.5).unwrap();
+        
+        assert_eq!(scores.len(), 10);
+        assert_eq!(labels.len(), 10);
+    }
+
+    #[test]
+    fn test_run_isolation_forest_11_features() {
+        // Test 11 dimensions
+        let mut data = vec![0.0; 110]; // 10 samples × 11 features
+        for i in 0..10 {
+            for j in 0..11 {
+                data[i * 11 + j] = (i as f64) + (j as f64 * 0.1);
+            }
+        }
+        let features = Array2::from_shape_vec((10, 11), data).unwrap();
+        let (scores, labels) = run_isolation_forest(features, 0.5).unwrap();
+        
+        assert_eq!(scores.len(), 10);
+        assert_eq!(labels.len(), 10);
     }
 
     #[test]

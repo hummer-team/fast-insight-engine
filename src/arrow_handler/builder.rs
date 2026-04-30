@@ -144,7 +144,11 @@ mod tests {
 
     #[test]
     fn test_build_anomaly_result() {
-        let order_ids = vec!["ORD001".to_string(), "ORD002".to_string(), "ORD003".to_string()];
+        let order_ids = vec![
+            "ORD001".to_string(),
+            "ORD002".to_string(),
+            "ORD003".to_string(),
+        ];
         let scores = vec![0.1, 0.5, 0.9];
         let labels = vec![false, false, true];
 
@@ -163,7 +167,11 @@ mod tests {
 
     #[test]
     fn test_build_cluster_result() {
-        let order_ids = vec!["ORD001".to_string(), "ORD002".to_string(), "ORD003".to_string()];
+        let order_ids = vec![
+            "ORD001".to_string(),
+            "ORD002".to_string(),
+            "ORD003".to_string(),
+        ];
         let cluster_ids = vec![0, 1, 0];
 
         let result = build_cluster_result(order_ids, cluster_ids).unwrap();

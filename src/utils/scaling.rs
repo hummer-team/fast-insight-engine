@@ -40,14 +40,8 @@ pub fn min_max_scale(features: Array2<f64>) -> Result<Array2<f64>, AnalysisError
 
     for col_idx in 0..features.ncols() {
         let col = features.column(col_idx);
-        let min = col
-            .iter()
-            .cloned()
-            .fold(f64::INFINITY, f64::min);
-        let max = col
-            .iter()
-            .cloned()
-            .fold(f64::NEG_INFINITY, f64::max);
+        let min = col.iter().cloned().fold(f64::INFINITY, f64::min);
+        let max = col.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
         let range = max - min;
 
         if range.abs() < f64::EPSILON {
@@ -152,7 +146,7 @@ mod tests {
         let col0_mean = scaled.column(0).mean().unwrap();
         let col0_std = scaled.column(0).std(0.0);
         assert!((col0_mean - 0.0).abs() < 1e-10); // Mean should be ~0
-        assert!((col0_std - 1.0).abs() < 1e-10);  // Std should be ~1
+        assert!((col0_std - 1.0).abs() < 1e-10); // Std should be ~1
 
         // Column 1: mean=20, std≈8.165
         let col1_mean = scaled.column(1).mean().unwrap();
@@ -177,8 +171,8 @@ mod tests {
         let features = arr2(&[[-10.0], [0.0], [10.0]]);
         let scaled = min_max_scale(features).unwrap();
 
-        assert!((scaled[[0, 0]] - 0.0).abs() < 1e-10);  // (-10-(-10))/20 = 0
-        assert!((scaled[[1, 0]] - 0.5).abs() < 1e-10);  // (0-(-10))/20 = 0.5
-        assert!((scaled[[2, 0]] - 1.0).abs() < 1e-10);  // (10-(-10))/20 = 1
+        assert!((scaled[[0, 0]] - 0.0).abs() < 1e-10); // (-10-(-10))/20 = 0
+        assert!((scaled[[1, 0]] - 0.5).abs() < 1e-10); // (0-(-10))/20 = 0.5
+        assert!((scaled[[2, 0]] - 1.0).abs() < 1e-10); // (10-(-10))/20 = 1
     }
 }

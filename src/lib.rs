@@ -1,15 +1,21 @@
 use wasm_bindgen::prelude::*;
 
+// Use wee_alloc as the global allocator for WASM to reduce binary size
+#[cfg(target_arch = "wasm32")]
+#[global_allocator]
+static ALLOC: wee_alloc::WeeAlloc = wee_alloc::WeeAlloc;
+
 pub mod arrow_handler;
+pub mod file_convert;
 pub mod gpu;
 pub mod insight_core;
-pub mod utils;
+pub mod utils; // New file conversion module
 
 use arrow_handler::{
     build_anomaly_result, build_cluster_result, build_regression_result, parse_arrow_ipc,
 };
 use insight_core::{run_isolation_forest, run_kmeans, run_linear_regression};
-use utils::{min_max_scale, standard_scale, ScalingMethod};
+use utils::{ScalingMethod, min_max_scale, standard_scale};
 
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::JsValue;
@@ -28,7 +34,7 @@ macro_rules! console_log {
 
 #[cfg(not(target_arch = "wasm32"))]
 macro_rules! console_log {
-    ($($t:tt)*) => {}
+    ($($t:tt)*) => {};
 }
 
 /// Detect anomalous orders using Extended Isolation Forest (CPU-only)
@@ -69,16 +75,25 @@ pub async fn detect_order_anomalies(
     scaling_mode: u8,
     use_gpu: bool,
 ) -> Result<Vec<u8>, JsError> {
-    console_log!("🔍 [WASM] detect_order_anomalies called: {} bytes, threshold={}, scaling={}, gpu={}", 
-                 data.len(), threshold, scaling_mode, use_gpu);
-    
+    console_log!(
+        "🔍 [WASM] detect_order_anomalies called: {} bytes, threshold={}, scaling={}, gpu={}",
+        data.len(),
+        threshold,
+        scaling_mode,
+        use_gpu
+    );
+
     // Parse Arrow IPC input
     console_log!("🔍 [WASM] Parsing Arrow IPC...");
     let parsed = parse_arrow_ipc(data).map_err(|e| {
         console_log!("❌ [WASM] Arrow IPC parsing failed: {}", e);
         e
     })?;
-    console_log!("✓ [WASM] Parsed {} orders x {} features", parsed.order_ids.len(), parsed.features.ncols());
+    console_log!(
+        "✓ [WASM] Parsed {} orders x {} features",
+        parsed.order_ids.len(),
+        parsed.features.ncols()
+    );
 
     // Apply scaling based on mode
     console_log!("🔍 [WASM] Applying scaling mode: {}", scaling_mode);
@@ -102,7 +117,11 @@ pub async fn detect_order_anomalies(
             })?
         }
     };
-    console_log!("✓ [WASM] Scaling complete, features shape: {}x{}", features.nrows(), features.ncols());
+    console_log!(
+        "✓ [WASM] Scaling complete, features shape: {}x{}",
+        features.nrows(),
+        features.ncols()
+    );
 
     // Log warning if GPU is requested (Extended IForest is CPU-only)
     if use_gpu {
@@ -114,37 +133,56 @@ pub async fn detect_order_anomalies(
     // Run anomaly detection using Extended Isolation Forest (CPU-only)
     console_log!("🔍 [WASM] Starting Extended Isolation Forest computation...");
     let start_time = js_sys::Date::now();
-    
+
     let (scores, labels) = run_isolation_forest(features, threshold).map_err(|e| {
         console_log!("❌ [WASM] Extended IForest computation failed: {}", e);
         e
     })?;
-    
+
     let elapsed_ms = js_sys::Date::now() - start_time;
-    console_log!("⏱ [WASM] Algorithm execution time: {:.2}ms ({:.2}s)", elapsed_ms, elapsed_ms / 1000.0);
-    
+    console_log!(
+        "⏱ [WASM] Algorithm execution time: {:.2}ms ({:.2}s)",
+        elapsed_ms,
+        elapsed_ms / 1000.0
+    );
+
     // Log score statistics
     let score_min = scores.iter().copied().fold(f64::INFINITY, f64::min);
     let score_max = scores.iter().copied().fold(f64::NEG_INFINITY, f64::max);
     let score_avg = scores.iter().sum::<f64>() / scores.len() as f64;
     let anomaly_count = labels.iter().filter(|&&l| l).count();
-    
+
     console_log!("📊 [WASM] Score statistics:");
-    console_log!("  - Min: {:.6}, Max: {:.6}, Avg: {:.6}", score_min, score_max, score_avg);
-    console_log!("  - Threshold: {}, Anomalies: {} / {} ({:.2}%)", 
-                 threshold, anomaly_count, scores.len(), 
-                 (anomaly_count as f64 / scores.len() as f64 * 100.0));
-    console_log!("  - Score sample (first 10): {:?}", &scores[..scores.len().min(10)]);
-    
+    console_log!(
+        "  - Min: {:.6}, Max: {:.6}, Avg: {:.6}",
+        score_min,
+        score_max,
+        score_avg
+    );
+    console_log!(
+        "  - Threshold: {}, Anomalies: {} / {} ({:.2}%)",
+        threshold,
+        anomaly_count,
+        scores.len(),
+        (anomaly_count as f64 / scores.len() as f64 * 100.0)
+    );
+    console_log!(
+        "  - Score sample (first 10): {:?}",
+        &scores[..scores.len().min(10)]
+    );
+
     // Suppress unused warnings in non-wasm builds (console_log expands to nothing)
     let _ = (elapsed_ms, score_min, score_max, score_avg, anomaly_count);
 
     // Build Arrow IPC result
     console_log!("🔍 [WASM] Building Arrow IPC result...");
     let result = build_anomaly_result(parsed.order_ids, scores, labels)?;
-    
+
     console_log!("✓ [WASM] Arrow IPC result built: {} bytes", result.len());
-    console_log!("📤 [WASM] Returning {} anomaly results to TypeScript", result.len());
+    console_log!(
+        "📤 [WASM] Returning {} anomaly results to TypeScript",
+        result.len()
+    );
 
     Ok(result)
 }
@@ -210,7 +248,7 @@ pub async fn segment_customer_orders(
     // Run K-Means clustering with GPU acceleration if requested
     let cluster_ids = if use_gpu {
         console_log!("Attempting GPU K-Means clustering...");
-        
+
         // Try GPU computation
         match gpu::GpuCompute::new().await {
             Ok(gpu_compute) => {

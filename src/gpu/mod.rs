@@ -43,9 +43,7 @@ impl GpuCompute {
                 force_fallback_adapter: false,
             })
             .await
-            .ok_or_else(|| {
-                AnalysisError::ModelError("No GPU adapter available".into())
-            })?;
+            .ok_or_else(|| AnalysisError::ModelError("No GPU adapter available".into()))?;
 
         // Request device and queue
         let (device, queue) = adapter
@@ -58,16 +56,12 @@ impl GpuCompute {
                 None,
             )
             .await
-            .map_err(|e| {
-                AnalysisError::ModelError(format!("Failed to create device: {:?}", e))
-            })?;
+            .map_err(|e| AnalysisError::ModelError(format!("Failed to create device: {:?}", e)))?;
 
         // Load compute shader
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("KNN Compute Shader"),
-            source: wgpu::ShaderSource::Wgsl(
-                include_str!("../../shaders/knn_compute.wgsl").into(),
-            ),
+            source: wgpu::ShaderSource::Wgsl(include_str!("../../shaders/knn_compute.wgsl").into()),
         });
 
         // Create bind group layout
@@ -136,7 +130,11 @@ impl GpuCompute {
     /// # Arguments
     /// * `features` - Feature matrix (rows=samples, cols=features)
     /// * `k` - Number of nearest neighbors (max 10)
-    pub async fn compute_knn(&self, features: &Array2<f64>, k: usize) -> Result<Vec<f64>, AnalysisError> {
+    pub async fn compute_knn(
+        &self,
+        features: &Array2<f64>,
+        k: usize,
+    ) -> Result<Vec<f64>, AnalysisError> {
         let (n_samples, n_features) = features.dim();
 
         if k == 0 || k >= n_samples {
@@ -156,11 +154,13 @@ impl GpuCompute {
         let features_f32: Vec<f32> = features.iter().map(|&x| x as f32).collect();
 
         // Create GPU buffers
-        let features_buffer = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Features Buffer"),
-            contents: bytemuck::cast_slice(&features_f32),
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-        });
+        let features_buffer = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Features Buffer"),
+                contents: bytemuck::cast_slice(&features_f32),
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            });
 
         let scores_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Scores Buffer"),
@@ -185,11 +185,13 @@ impl GpuCompute {
             _padding: 0,
         };
 
-        let params_buffer = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Params Buffer"),
-            contents: bytemuck::bytes_of(&params),
-            usage: wgpu::BufferUsages::UNIFORM,
-        });
+        let params_buffer = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Params Buffer"),
+                contents: bytemuck::bytes_of(&params),
+                usage: wgpu::BufferUsages::UNIFORM,
+            });
 
         // Create bind group
         let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -300,24 +302,25 @@ impl GpuCompute {
         let mut assignments = vec![0usize; n_samples];
 
         // Convert data to f32 for GPU
-        let data_f32: Vec<f32> = features
-            .iter()
-            .map(|&x| x as f32)
-            .collect();
+        let data_f32: Vec<f32> = features.iter().map(|&x| x as f32).collect();
 
         // Prepare GPU buffers
-        let data_buffer = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("K-Means Data Buffer"),
-            contents: bytemuck::cast_slice(&data_f32),
-            usage: wgpu::BufferUsages::STORAGE,
-        });
+        let data_buffer = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("K-Means Data Buffer"),
+                contents: bytemuck::cast_slice(&data_f32),
+                usage: wgpu::BufferUsages::STORAGE,
+            });
 
         let params = [n_samples as u32, n_features as u32, n_clusters as u32];
-        let params_buffer = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("K-Means Params Buffer"),
-            contents: bytemuck::cast_slice(&params),
-            usage: wgpu::BufferUsages::STORAGE,
-        });
+        let params_buffer = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("K-Means Params Buffer"),
+                contents: bytemuck::cast_slice(&params),
+                usage: wgpu::BufferUsages::STORAGE,
+            });
 
         let assignments_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("K-Means Assignments Buffer"),
@@ -334,83 +337,93 @@ impl GpuCompute {
         });
 
         // Load K-Means shader
-        let shader = self.device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("K-Means Shader"),
-            source: wgpu::ShaderSource::Wgsl(
-                include_str!("../../shaders/kmeans_compute.wgsl").into()
-            ),
-        });
+        let shader = self
+            .device
+            .create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("K-Means Shader"),
+                source: wgpu::ShaderSource::Wgsl(
+                    include_str!("../../shaders/kmeans_compute.wgsl").into(),
+                ),
+            });
 
         // Create bind group layout for K-Means
-        let kmeans_bind_group_layout = self.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("K-Means Bind Group Layout"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: false },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 3,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-            ],
-        });
+        let kmeans_bind_group_layout =
+            self.device
+                .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                    label: Some("K-Means Bind Group Layout"),
+                    entries: &[
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 0,
+                            visibility: wgpu::ShaderStages::COMPUTE,
+                            ty: wgpu::BindingType::Buffer {
+                                ty: wgpu::BufferBindingType::Storage { read_only: true },
+                                has_dynamic_offset: false,
+                                min_binding_size: None,
+                            },
+                            count: None,
+                        },
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 1,
+                            visibility: wgpu::ShaderStages::COMPUTE,
+                            ty: wgpu::BindingType::Buffer {
+                                ty: wgpu::BufferBindingType::Storage { read_only: true },
+                                has_dynamic_offset: false,
+                                min_binding_size: None,
+                            },
+                            count: None,
+                        },
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 2,
+                            visibility: wgpu::ShaderStages::COMPUTE,
+                            ty: wgpu::BindingType::Buffer {
+                                ty: wgpu::BufferBindingType::Storage { read_only: false },
+                                has_dynamic_offset: false,
+                                min_binding_size: None,
+                            },
+                            count: None,
+                        },
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 3,
+                            visibility: wgpu::ShaderStages::COMPUTE,
+                            ty: wgpu::BindingType::Buffer {
+                                ty: wgpu::BufferBindingType::Storage { read_only: true },
+                                has_dynamic_offset: false,
+                                min_binding_size: None,
+                            },
+                            count: None,
+                        },
+                    ],
+                });
 
-        let pipeline_layout = self.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("K-Means Pipeline Layout"),
-            bind_group_layouts: &[&kmeans_bind_group_layout],
-            push_constant_ranges: &[],
-        });
+        let pipeline_layout = self
+            .device
+            .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("K-Means Pipeline Layout"),
+                bind_group_layouts: &[&kmeans_bind_group_layout],
+                push_constant_ranges: &[],
+            });
 
-        let pipeline = self.device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("K-Means Pipeline"),
-            layout: Some(&pipeline_layout),
-            module: &shader,
-            entry_point: "kmeans_assign",
-            compilation_options: Default::default(),
-        });
+        let pipeline = self
+            .device
+            .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("K-Means Pipeline"),
+                layout: Some(&pipeline_layout),
+                module: &shader,
+                entry_point: "kmeans_assign",
+                compilation_options: Default::default(),
+            });
 
         // Iterative optimization
         for iteration in 0..max_iterations {
             // Update centroids buffer
             let centroids_f32: Vec<f32> = centroids.iter().map(|&x| x as f32).collect();
-            let centroids_buffer = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("K-Means Centroids Buffer"),
-                contents: bytemuck::cast_slice(&centroids_f32),
-                usage: wgpu::BufferUsages::STORAGE,
-            });
+            let centroids_buffer =
+                self.device
+                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: Some("K-Means Centroids Buffer"),
+                        contents: bytemuck::cast_slice(&centroids_f32),
+                        usage: wgpu::BufferUsages::STORAGE,
+                    });
 
             // Create bind group
             let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -437,9 +450,11 @@ impl GpuCompute {
             });
 
             // Execute GPU assignment
-            let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("K-Means Encoder"),
-            });
+            let mut encoder = self
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("K-Means Encoder"),
+                });
 
             {
                 let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
@@ -448,7 +463,7 @@ impl GpuCompute {
                 });
                 compute_pass.set_pipeline(&pipeline);
                 compute_pass.set_bind_group(0, &bind_group, &[]);
-                
+
                 let workgroups = (n_samples as u32 + 255) / 256;
                 compute_pass.dispatch_workgroups(workgroups, 1, 1);
             }
@@ -465,7 +480,8 @@ impl GpuCompute {
 
             // Read back assignments
             let buffer_slice = staging_buffer.slice(..);
-            let (tx, rx) = futures::channel::oneshot::channel::<Result<(), wgpu::BufferAsyncError>>();
+            let (tx, rx) =
+                futures::channel::oneshot::channel::<Result<(), wgpu::BufferAsyncError>>();
             buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
                 let _ = tx.send(result);
             });
@@ -473,7 +489,9 @@ impl GpuCompute {
             self.device.poll(wgpu::Maintain::Wait);
             rx.await
                 .map_err(|_| AnalysisError::ModelError("Failed to receive GPU result".into()))?
-                .map_err(|e| AnalysisError::ModelError(format!("Buffer mapping failed: {:?}", e)))?;
+                .map_err(|e| {
+                    AnalysisError::ModelError(format!("Buffer mapping failed: {:?}", e))
+                })?;
 
             let data = buffer_slice.get_mapped_range();
             let assignments_u32: Vec<u32> = bytemuck::cast_slice(&data).to_vec();
@@ -501,17 +519,17 @@ fn kmeans_plusplus_init(features: &Array2<f64>, k: usize) -> Vec<f64> {
     let n_samples = features.nrows();
     let n_features = features.ncols();
     let mut centroids = Vec::with_capacity(k * n_features);
-    
+
     // Choose first centroid randomly
     let first_idx = 0; // Use first sample for deterministic results
     for j in 0..n_features {
         centroids.push(features[[first_idx, j]]);
     }
-    
+
     // Choose remaining centroids
     for _ in 1..k {
         let mut distances = vec![f64::MAX; n_samples];
-        
+
         // Compute distance to nearest existing centroid
         for i in 0..n_samples {
             for c in 0..(centroids.len() / n_features) {
@@ -523,7 +541,7 @@ fn kmeans_plusplus_init(features: &Array2<f64>, k: usize) -> Vec<f64> {
                 distances[i] = distances[i].min(dist);
             }
         }
-        
+
         // Choose next centroid (point with max distance)
         let next_idx = distances
             .iter()
@@ -531,12 +549,12 @@ fn kmeans_plusplus_init(features: &Array2<f64>, k: usize) -> Vec<f64> {
             .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
             .map(|(i, _)| i)
             .unwrap();
-        
+
         for j in 0..n_features {
             centroids.push(features[[next_idx, j]]);
         }
     }
-    
+
     centroids
 }
 
@@ -550,7 +568,7 @@ fn update_centroids(
     let n_samples = features.nrows();
     let mut sums = vec![0.0; k * n_features];
     let mut counts = vec![0; k];
-    
+
     // Accumulate sums
     for i in 0..n_samples {
         let cluster = assignments[i];
@@ -559,7 +577,7 @@ fn update_centroids(
             sums[cluster * n_features + j] += features[[i, j]];
         }
     }
-    
+
     // Compute means
     for c in 0..k {
         if counts[c] > 0 {
@@ -568,7 +586,7 @@ fn update_centroids(
             }
         }
     }
-    
+
     sums
 }
 

@@ -36,6 +36,8 @@ pub struct ExcelLoadOptions {
     pub sheet: Option<SheetSelector>,
     /// Maximum string table size in bytes (default: 100MB)
     pub max_string_table_bytes: Option<u64>,
+    /// Whether the first row contains column headers (default: true)
+    pub has_header: bool,
 }
 
 /// Sheet selector: by name or index
@@ -67,29 +69,31 @@ pub enum ParquetCompression {
     Zstd,
 }
 
-/// Schema hint for CSV conversion - defines expected column names and types
-/// Optional metadata that enables strict type conversion during CSV→Parquet
+/// Schema hint for CSV/Excel conversion - defines expected column names and types
+/// Optional metadata that enables strict type conversion during file→Parquet
 ///
 /// When provided:
 /// - Each column will be converted to its specified type
 /// - Parse failures return ConvertError (fail-fast approach)
-/// - Must match CSV column count exactly
+/// - Must match file column count exactly
 ///
 /// When not provided:
 /// - All columns remain as Utf8 (raw string values)
 /// - DuckDB Wasm handles type inference during loading
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SchemaHint {
-    /// Column definitions (order must match CSV column order)
+    /// Column definitions (order must match file column order)
     pub columns: Vec<ColumnDef>,
 }
 
 /// Column type definition for schema hints
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ColumnDef {
-    /// Column name (will override CSV header or col_N)
+    /// Column name (will override file header or col_N)
     pub name: String,
-    /// Data type: 0=Utf8, 1=Int64, 2=Float64, 3=Boolean, 4=Date, others=Utf8(default)
+    /// Data type: 0=Utf8, 1=Int64, 2=Float64, 3=Boolean, others=Utf8 (default)
     pub type_id: u8,
 }
 
@@ -155,6 +159,7 @@ impl Default for ExcelLoadOptions {
         Self {
             sheet: None,
             max_string_table_bytes: Some(100_000_000), // 100 MB default
+            has_header: true,
         }
     }
 }

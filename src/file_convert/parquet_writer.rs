@@ -369,6 +369,39 @@ impl ParquetBuilder {
 
                 Ok(Arc::new(Float64Array::from(values)))
             }
+            DataType::Boolean => {
+                // Strict mode: parse to Boolean
+                // Accepts: "true"/"false", "1"/"0", "yes"/"no", "t"/"f", "y"/"n" (case-insensitive)
+                let mut bool_values: Vec<Option<bool>> = Vec::with_capacity(rows.len());
+
+                for row in rows {
+                    if let Some(s) = row.get(col_idx) {
+                        if s.is_empty() {
+                            bool_values.push(None);
+                        } else {
+                            let parsed = match s.to_lowercase().as_str() {
+                                "true" | "1" | "yes" | "t" | "y" => Some(true),
+                                "false" | "0" | "no" | "f" | "n" => Some(false),
+                                _ => None,
+                            };
+                            match parsed {
+                                Some(v) => bool_values.push(Some(v)),
+                                None => {
+                                    return Err(ConvertError::TypeConversionFailed {
+                                        column: field.name().to_string(),
+                                        value: s.clone(),
+                                        target_type: "Boolean".to_string(),
+                                    })
+                                }
+                            }
+                        }
+                    } else {
+                        bool_values.push(None);
+                    }
+                }
+
+                Ok(Arc::new(BooleanArray::from(bool_values)))
+            }
             _dt => {
                 // Default to UTF-8 for unsupported types
                 let values: Vec<Option<&str>> = rows

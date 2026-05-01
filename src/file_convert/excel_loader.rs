@@ -12,7 +12,7 @@ use std::sync::Arc;
 /// Handles sheet selection, data extraction, and memory constraints
 pub struct ExcelParser {
     /// Loaded workbook data (calamine::Sheets)
-    /// For MVP, we'll store processed rows here
+    /// For MVP, we'll store processed rows here (data rows only, not header)
     rows: Vec<Vec<String>>,
     /// Current row index
     current_row: usize,
@@ -22,6 +22,8 @@ pub struct ExcelParser {
     total_rows: usize,
     /// String table size estimate (bytes)
     string_table_size: usize,
+    /// Column names from header row (when has_header=true)
+    header_columns: Option<Vec<String>>,
 }
 
 impl ExcelParser {
@@ -72,14 +74,26 @@ impl ExcelParser {
             }
         }
 
-        let total_rows = rows.len();
+        let _total_rows = rows.len();
+
+        // Separate header row from data rows when has_header=true
+        let (header_columns, data_rows) = if options.has_header && !rows.is_empty() {
+            let header = rows[0].clone();
+            let data = rows[1..].to_vec();
+            (Some(header), data)
+        } else {
+            (None, rows)
+        };
+
+        let total_data_rows = data_rows.len();
 
         Ok(Self {
-            rows,
+            rows: data_rows,
             current_row: 0,
             schema: None,
-            total_rows,
+            total_rows: total_data_rows,
             string_table_size,
+            header_columns,
         })
     }
 
@@ -235,6 +249,17 @@ impl ExcelParser {
     /// Get string table size estimate
     pub fn string_table_size(&self) -> usize {
         self.string_table_size
+    }
+
+    /// Get column names from header row (when has_header=true)
+    /// Returns None if no header was available
+    pub fn inferred_columns(&self) -> Option<&Vec<String>> {
+        self.header_columns.as_ref()
+    }
+
+    /// Returns true if column names were inferred from header row
+    pub fn schema_inferred(&self) -> bool {
+        self.header_columns.is_some()
     }
 
     /// Get total row count

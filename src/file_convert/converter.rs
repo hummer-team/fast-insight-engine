@@ -29,8 +29,10 @@ pub struct Converter {
     excel_parser: Option<ExcelParser>,
     /// Parquet builder (active during conversions)
     parquet_builder: Option<ParquetBuilder>,
-    /// Optional schema hint for CSV columns (for strict type conversion)
+    /// Optional schema hint for columns (for strict type conversion)
     schema_hint: Option<super::types::SchemaHint>,
+    /// Excel load options (stored for use in feed_excel_chunk)
+    excel_opts: Option<ExcelLoadOptions>,
     /// Memory limit in MB
     memory_limit_mb: u32,
     /// Total bytes consumed (CSV or Excel)
@@ -46,6 +48,7 @@ impl Converter {
             excel_parser: None,
             parquet_builder: None,
             schema_hint: None,
+            excel_opts: None,
             memory_limit_mb: 150,
             bytes_consumed: 0,
         }
@@ -59,6 +62,7 @@ impl Converter {
             excel_parser: None,
             parquet_builder: None,
             schema_hint: None,
+            excel_opts: None,
             memory_limit_mb: limit_mb,
             bytes_consumed: 0,
         }
@@ -69,6 +73,7 @@ impl Converter {
         &mut self,
         excel_opts: ExcelLoadOptions,
         parquet_opts: ParquetWriteOptions,
+        schema_hint: Option<&super::types::SchemaHint>,
     ) -> ConvertResult<()> {
         // Validate state
         if self.state != ConversionState::Idle {
@@ -98,6 +103,8 @@ impl Converter {
         // Update state (excel parser will be created when feed_excel_chunk is called with actual data)
         self.excel_parser = None; // Will be populated on first feed
         self.parquet_builder = Some(parquet_builder);
+        self.schema_hint = schema_hint.cloned();
+        self.excel_opts = Some(excel_opts);
         self.state = ConversionState::ExcelToParquet;
         self.bytes_consumed = 0;
 
@@ -123,9 +130,9 @@ impl Converter {
             });
         }
 
-        // Initialize Excel parser on first call
+        // Initialize Excel parser on first call using stored options
         if self.excel_parser.is_none() {
-            let excel_opts = ExcelLoadOptions::default(); // Use default for now
+            let excel_opts = self.excel_opts.clone().unwrap_or_default();
             let excel_parser = ExcelParser::new(chunk, &excel_opts)?;
             self.excel_parser = Some(excel_parser);
         }
@@ -134,6 +141,41 @@ impl Converter {
         let excel_parser = self.excel_parser.as_mut().ok_or(ConvertError::InvalidState {
             reason: "Excel parser not initialized".to_string(),
         })?;
+
+        // Rebuild Parquet schema from Excel header (same pattern as CSV)
+        // Must happen before any rows are added to the builder
+        if excel_parser.schema_inferred() && self.parquet_builder.is_some() {
+            let mut needs_rebuild = false;
+
+            if let Some(pb) = self.parquet_builder.as_ref() {
+                let fields = pb.arrow_schema().fields();
+                needs_rebuild = !fields.is_empty()
+                    && fields[0].name().starts_with("col_")
+                    && fields.iter().enumerate().all(|(i, f)| f.name() == &format!("col_{}", i));
+            }
+
+            if needs_rebuild {
+                let col_names = excel_parser.inferred_columns().cloned().unwrap_or_default();
+
+                let opts = if let Some(pb) = self.parquet_builder.take() {
+                    ParquetWriteOptions {
+                        row_group_size: pb.row_group_size_value(),
+                        compression: pb.parquet_options().compression,
+                    }
+                } else {
+                    ParquetWriteOptions::default()
+                };
+
+                let new_builder = ParquetBuilder::new_with_optional_schema(
+                    col_names,
+                    self.schema_hint.as_ref(),
+                    opts,
+                    self.memory_limit_mb,
+                )?;
+
+                self.parquet_builder = Some(new_builder);
+            }
+        }
 
         // Get rows (this is simplified - real version would handle streaming)
         let rows = excel_parser.get_batch(1024);
@@ -320,6 +362,7 @@ impl Converter {
         self.excel_parser = None;
         self.parquet_builder = None;
         self.schema_hint = None;
+        self.excel_opts = None;
         self.bytes_consumed = 0;
     }
 

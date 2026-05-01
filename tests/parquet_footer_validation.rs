@@ -23,7 +23,7 @@ mod parquet_footer_tests {
             compression: ParquetCompression::Uncompressed,
         };
 
-        converter.begin_csv_to_parquet(csv_opts, pq_opts).expect("begin failed");
+        converter.begin_csv_to_parquet(csv_opts, pq_opts, None).expect("begin failed");
         let chunks = converter.feed_csv_chunk(csv_data, true).expect("feed failed");
 
         // Verify: Parquet file structure
@@ -84,7 +84,7 @@ mod parquet_footer_tests {
             compression: ParquetCompression::Uncompressed,
         };
 
-        converter.begin_csv_to_parquet(csv_opts, pq_opts).expect("begin failed");
+        converter.begin_csv_to_parquet(csv_opts, pq_opts, None).expect("begin failed");
         let chunks = converter.feed_csv_chunk(csv_data.as_bytes(), true).expect("feed failed");
 
         // With 3000 rows and row_group_size=1000, we expect 3 chunks
@@ -116,7 +116,7 @@ mod parquet_footer_tests {
             compression: ParquetCompression::Uncompressed,
         };
 
-        converter.begin_csv_to_parquet(csv_opts, pq_opts).expect("begin failed");
+        converter.begin_csv_to_parquet(csv_opts, pq_opts, None).expect("begin failed");
         let chunks = converter.feed_csv_chunk(csv_data, true).expect("feed failed");
 
         assert!(!chunks.is_empty(), "Should produce output");

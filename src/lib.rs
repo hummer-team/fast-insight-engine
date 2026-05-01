@@ -347,6 +347,10 @@ pub async fn predict_inventory_demand(
 /// * `delimiter` - CSV delimiter: b',' (44), b'\t' (9), b'|' (124), b';' (59)
 /// * `has_header` - Whether first row contains column headers
 /// * `row_group_size` - Parquet row group size (64-16384, default: 1024)
+/// * `schema_hint_json` - Optional JSON schema hint for strict type conversion.
+///   Pass `undefined`/`null` for lenient mode (DuckDB will infer types).
+///   JSON format: `{"columns":[{"name":"col","type_id":1}]}`
+///   Supported type_ids: 0=Utf8, 1=Int64, 2=Float64, 3=Boolean (others default to Utf8)
 ///
 /// # Returns
 /// * `Ok(Uint8Array)` - Complete Parquet file bytes with footer metadata (DuckDB Wasm compatible)
@@ -363,10 +367,11 @@ pub async fn convert_csv_to_parquet(
     delimiter: u8,
     has_header: bool,
     row_group_size: usize,
+    schema_hint_json: Option<String>,
 ) -> Result<Vec<u8>, JsError> {
     #[cfg(target_arch = "wasm32")]
     {
-        let _ = (csv_data, delimiter, has_header, row_group_size);
+        let _ = (csv_data, delimiter, has_header, row_group_size, schema_hint_json);
         Err(JsError::new(
             "CSV to Parquet unavailable in Wasm (csv library uses C code). \
              Alternatives: Use DuckDB Wasm CSV reader, or papaparse + Arrow IPC builder.",
@@ -375,7 +380,17 @@ pub async fn convert_csv_to_parquet(
 
     #[cfg(not(target_arch = "wasm32"))]
     {
-        use crate::file_convert::{Converter, CsvReadOptions, ParquetWriteOptions};
+        use crate::file_convert::{Converter, CsvReadOptions, ParquetWriteOptions, SchemaHint};
+
+        // Parse optional schema hint: empty/None = lenient mode, JSON = strict mode
+        let schema_hint: Option<SchemaHint> = match schema_hint_json.as_deref() {
+            None | Some("") => None,
+            Some(json) => {
+                let hint: SchemaHint = serde_json::from_str(json)
+                    .map_err(|e| JsError::new(&format!("Invalid schema_hint_json: {}", e)))?;
+                Some(hint)
+            }
+        };
 
         let mut converter = Converter::new();
         let csv_opts = CsvReadOptions {
@@ -388,8 +403,10 @@ pub async fn convert_csv_to_parquet(
             compression: crate::file_convert::ParquetCompression::Uncompressed,
         };
 
-        // Begin conversion (schema_hint = None for lenient mode - DuckDB will infer types)
-        converter.begin_csv_to_parquet(csv_opts, pq_opts, None)
+        // Begin conversion with optional schema hint
+        // None = lenient mode: all columns Utf8, DuckDB handles type inference
+        // Some(hint) = strict mode: convert columns to specified types, fail on mismatch
+        converter.begin_csv_to_parquet(csv_opts, pq_opts, schema_hint.as_ref())
             .map_err(|e| JsError::new(&format!("CSV→Parquet error: {}", e)))?;
 
         // Process all CSV data in one chunk
@@ -421,6 +438,10 @@ pub async fn convert_csv_to_parquet(
 /// * `has_header` - Whether first row contains column headers
 /// * `row_group_size` - Parquet row group size (64-16384, default: 1024)
 /// * `max_string_table_bytes` - Maximum Excel string table size in bytes (0 = use 100MB default)
+/// * `schema_hint_json` - Optional JSON schema hint for strict type conversion.
+///   Pass `undefined`/`null` for lenient mode (DuckDB will infer types).
+///   JSON format: `{"columns":[{"name":"col","type_id":1}]}`
+///   Supported type_ids: 0=Utf8, 1=Int64, 2=Float64, 3=Boolean (others default to Utf8)
 ///
 /// # Returns
 /// * `Ok(Uint8Array)` - Complete Parquet file bytes with footer metadata (DuckDB Wasm compatible)
@@ -438,10 +459,11 @@ pub async fn convert_excel_to_parquet(
     has_header: bool,
     row_group_size: usize,
     max_string_table_bytes: u64,
+    schema_hint_json: Option<String>,
 ) -> Result<Vec<u8>, JsError> {
     #[cfg(target_arch = "wasm32")]
     {
-        let _ = (excel_data, sheet_name_or_index, has_header, row_group_size, max_string_table_bytes);
+        let _ = (excel_data, sheet_name_or_index, has_header, row_group_size, max_string_table_bytes, schema_hint_json);
         Err(JsError::new(
             "Excel to Parquet unavailable in Wasm (calamine library uses C code). \
              Alternatives: Use JavaScript libraries (xlsx, exceljs) to read Excel, then Arrow IPC builder.",
@@ -450,7 +472,17 @@ pub async fn convert_excel_to_parquet(
 
     #[cfg(not(target_arch = "wasm32"))]
     {
-        use crate::file_convert::{Converter, ExcelLoadOptions, ParquetWriteOptions, SheetSelector};
+        use crate::file_convert::{Converter, ExcelLoadOptions, ParquetWriteOptions, SchemaHint, SheetSelector};
+
+        // Parse optional schema hint: empty/None = lenient mode, JSON = strict mode
+        let schema_hint: Option<SchemaHint> = match schema_hint_json.as_deref() {
+            None | Some("") => None,
+            Some(json) => {
+                let hint: SchemaHint = serde_json::from_str(json)
+                    .map_err(|e| JsError::new(&format!("Invalid schema_hint_json: {}", e)))?;
+                Some(hint)
+            }
+        };
 
         let mut converter = Converter::new();
         let excel_opts = ExcelLoadOptions {
@@ -465,14 +497,15 @@ pub async fn convert_excel_to_parquet(
             } else {
                 max_string_table_bytes
             }),
+            has_header,
         };
         let pq_opts = ParquetWriteOptions {
             row_group_size,
             compression: crate::file_convert::ParquetCompression::Uncompressed,
         };
 
-        // Begin conversion
-        converter.begin_excel_to_parquet(excel_opts, pq_opts)
+        // Begin conversion with optional schema hint
+        converter.begin_excel_to_parquet(excel_opts, pq_opts, schema_hint.as_ref())
             .map_err(|e| JsError::new(&format!("Excel→Parquet error: {}", e)))?;
 
         // Process all Excel data in one chunk

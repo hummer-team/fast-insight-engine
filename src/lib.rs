@@ -457,7 +457,22 @@ pub async fn convert_excel_to_parquet(
             } else {
                 Some(SheetSelector::ByName(sheet_name_or_index))
             },
-            max_string_table_bytes: Some(100_000_000),  // 100 MB limit
+            // max_string_table_bytes: Memory limit for Excel string table (100 MB)
+            //
+            // Purpose:
+            // Excel files store all unique strings in a "string table" (deduplicated).
+            // This parameter limits how much memory the string table can consume during parsing.
+            //
+            // Why it matters:
+            // - Excel files with millions of unique strings can consume massive memory
+            // - Without this limit, parsing could exhaust available memory (e.g., 150 MB Wasm limit)
+            // - 100 MB is a reasonable default that fits in Wasm memory constraints
+            //
+            // Behavior:
+            // - If string table exceeds this limit, parsing fails with ConvertError::ExcelLoadFailed
+            // - Prevents silent OOM crashes; fails fast with clear error message
+            // - Can be adjusted per-call by modifying this value (currently hard-coded for safety)
+            max_string_table_bytes: Some(100_000_000),  // 100 MB
         };
         let pq_opts = ParquetWriteOptions {
             row_group_size,

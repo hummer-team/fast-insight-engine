@@ -420,6 +420,7 @@ pub async fn convert_csv_to_parquet(
 /// * `sheet_name_or_index` - Sheet selector: empty string = first sheet, or sheet name
 /// * `has_header` - Whether first row contains column headers
 /// * `row_group_size` - Parquet row group size (64-16384, default: 1024)
+/// * `max_string_table_bytes` - Maximum Excel string table size in bytes (0 = use 100MB default)
 ///
 /// # Returns
 /// * `Ok(Uint8Array)` - Complete Parquet file bytes with footer metadata (DuckDB Wasm compatible)
@@ -436,10 +437,11 @@ pub async fn convert_excel_to_parquet(
     sheet_name_or_index: String,
     has_header: bool,
     row_group_size: usize,
+    max_string_table_bytes: u64,
 ) -> Result<Vec<u8>, JsError> {
     #[cfg(target_arch = "wasm32")]
     {
-        let _ = (excel_data, sheet_name_or_index, has_header, row_group_size);
+        let _ = (excel_data, sheet_name_or_index, has_header, row_group_size, max_string_table_bytes);
         Err(JsError::new(
             "Excel to Parquet unavailable in Wasm (calamine library uses C code). \
              Alternatives: Use JavaScript libraries (xlsx, exceljs) to read Excel, then Arrow IPC builder.",
@@ -457,22 +459,12 @@ pub async fn convert_excel_to_parquet(
             } else {
                 Some(SheetSelector::ByName(sheet_name_or_index))
             },
-            // max_string_table_bytes: Memory limit for Excel string table (100 MB)
-            //
-            // Purpose:
-            // Excel files store all unique strings in a "string table" (deduplicated).
-            // This parameter limits how much memory the string table can consume during parsing.
-            //
-            // Why it matters:
-            // - Excel files with millions of unique strings can consume massive memory
-            // - Without this limit, parsing could exhaust available memory (e.g., 150 MB Wasm limit)
-            // - 100 MB is a reasonable default that fits in Wasm memory constraints
-            //
-            // Behavior:
-            // - If string table exceeds this limit, parsing fails with ConvertError::ExcelLoadFailed
-            // - Prevents silent OOM crashes; fails fast with clear error message
-            // - Can be adjusted per-call by modifying this value (currently hard-coded for safety)
-            max_string_table_bytes: Some(100_000_000),  // 100 MB
+            // Use provided limit or default to 100 MB if 0 is passed
+            max_string_table_bytes: Some(if max_string_table_bytes == 0 {
+                100_000_000  // 100 MB default
+            } else {
+                max_string_table_bytes
+            }),
         };
         let pq_opts = ParquetWriteOptions {
             row_group_size,

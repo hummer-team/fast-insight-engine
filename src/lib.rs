@@ -341,6 +341,89 @@ pub async fn predict_inventory_demand(
     Ok(result)
 }
 
+/// Convert CSV stream to Parquet format
+///
+/// # Arguments
+/// * `csv_data` - CSV file bytes as Uint8Array
+/// * `delimiter` - CSV delimiter: b',' (44), b'\t' (9), b'|' (124), b';' (59)
+/// * `has_header` - Whether first row contains column headers
+/// * `row_group_size` - Parquet row group size (64-16384, default: 1024)
+///
+/// # Returns
+/// * `Ok(Uint8Array)` - Parquet file bytes
+/// * `Err(JsError)` - Conversion error message
+///
+/// # Note
+/// **In Wasm builds**: Currently returns error. Use DuckDB Wasm to read CSV
+/// and convert to Arrow IPC format instead.
+#[wasm_bindgen]
+pub async fn convert_csv_to_parquet(
+    csv_data: &[u8],
+    delimiter: u8,
+    has_header: bool,
+    row_group_size: usize,
+) -> Result<Vec<u8>, JsValue> {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = (csv_data, delimiter, has_header, row_group_size);
+        Err(JsValue::from_str(
+            "CSV to Parquet not available in Wasm. Use DuckDB Wasm (read CSV → Arrow IPC) \
+             or papaparse (CSV → JSON) + manual Arrow IPC builder.",
+        ))
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        // For non-Wasm builds, would use file_convert module
+        let _ = (csv_data, delimiter, has_header, row_group_size);
+        Err(JsValue::from_str(
+            "CSV to Parquet requires building with file_convert module enabled.",
+        ))
+    }
+}
+
+/// Convert Excel file to Parquet format
+///
+/// # Arguments
+/// * `excel_data` - Excel file bytes (XLSX/XLS) as Uint8Array
+/// * `sheet_name_or_index` - Sheet selector: empty string = first sheet, or sheet name
+/// * `has_header` - Whether first row contains column headers
+/// * `row_group_size` - Parquet row group size (64-16384, default: 1024)
+///
+/// # Returns
+/// * `Ok(Uint8Array)` - Parquet file bytes
+/// * `Err(JsError)` - Conversion error message
+///
+/// # Note
+/// **In Wasm builds**: Currently returns error. Use JavaScript Excel libraries
+/// (xlsx/exceljs) to read Excel file, then manually build Arrow IPC format.
+#[wasm_bindgen]
+pub async fn convert_excel_to_parquet(
+    excel_data: &[u8],
+    sheet_name_or_index: String,
+    has_header: bool,
+    row_group_size: usize,
+) -> Result<Vec<u8>, JsValue> {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = (excel_data, sheet_name_or_index, has_header, row_group_size);
+        Err(JsValue::from_str(
+            "Excel to Parquet not available in Wasm. Use JavaScript libraries (xlsx/exceljs) \
+             to read Excel → JSON, then build Arrow IPC format manually.",
+        ))
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        // For non-Wasm builds, would use file_convert module
+        let _ = (excel_data, sheet_name_or_index, has_header, row_group_size);
+        Err(JsValue::from_str(
+            "Excel to Parquet requires building with file_convert module enabled.",
+        ))
+    }
+}
+
+
 /// Get Wasm module version for compatibility checking
 ///
 /// # Returns

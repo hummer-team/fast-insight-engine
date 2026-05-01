@@ -11,7 +11,46 @@ import * as fastInsight from '@hummer-team/fast-insight-engine';
 
 ## 四个导出函数
 
-### 1. 异常订单检测 (Isolation Forest)
+### 1. CSV → Parquet 转换
+
+```typescript
+const csvBytes = /* CSV file bytes */;
+
+const result = await fastInsight.convert_csv_to_parquet(
+  csvBytes,
+  44,         // delimiter: b',' = 44
+  true,       // has_header
+  1024        // row_group_size
+);
+
+// result 是 Parquet 格式的 Uint8Array
+```
+
+**注意**: 在 Wasm 中暂时不可用。推荐使用：
+- DuckDB Wasm: 读取 CSV → Arrow IPC 格式
+- papaparse: 解析 CSV → JSON，手动构建 Arrow IPC
+
+### 2. Excel → Parquet 转换
+
+```typescript
+const excelBytes = /* XLSX/XLS file bytes */;
+
+const result = await fastInsight.convert_excel_to_parquet(
+  excelBytes,
+  "Sheet1",   // 或空字符串表示第一个 sheet
+  true,       // has_header
+  1024        // row_group_size
+);
+
+// result 是 Parquet 格式的 Uint8Array
+```
+
+**注意**: 在 Wasm 中暂时不可用。推荐使用：
+- xlsx (SheetJS) 库: 读取 Excel 文件
+- exceljs: 读取和解析 Excel 数据
+- 手动构建 Arrow IPC 格式
+
+### 3. 异常订单检测 (Isolation Forest)
 
 ```typescript
 // 假设 data 是 Arrow IPC Stream 格式的 Uint8Array
@@ -36,7 +75,7 @@ const result = await fastInsight.detect_order_anomalies(
 // - is_abnormal (Boolean)
 ```
 
-### 2. 订单分组聚类 (K-Means)
+### 4. 订单分组聚类 (K-Means)
 
 ```typescript
 // K-Means 可以使用 WebGPU 加速（Chrome 113+）
@@ -54,7 +93,7 @@ const result = await fastInsight.segment_customer_orders(
 // - cluster_id (Int32) [0, k-1]
 ```
 
-### 3. 库存需求预测 (Linear Regression)
+### 5. 库存需求预测 (Linear Regression)
 
 ```typescript
 // 输入数据应该包含：
@@ -72,7 +111,7 @@ const result = await fastInsight.predict_inventory_demand(
 // - predicted_demand (Float64)
 ```
 
-### 4. 获取版本信息
+### 6. 获取版本信息
 
 ```typescript
 const version = fastInsight.get_wasm_version();

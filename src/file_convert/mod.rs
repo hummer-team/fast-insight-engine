@@ -5,12 +5,14 @@ pub mod csv_parser;
 /// Supports CSV ↔ Parquet conversion with streaming input/output
 /// in browser environment (WASM).
 pub mod error;
+pub mod excel_loader;
 pub mod parquet_writer;
 pub mod types;
 
 // Re-export public API
 pub use converter::{ConversionState, Converter};
 pub use error::{ConvertError, ConvertResult};
+pub use excel_loader::ExcelParser;
 pub use types::{
     CsvReadOptions, CsvWriteOptions, ExcelLoadOptions, NullHandling, ParquetCompression,
     ParquetWriteOptions, SheetSelector,

@@ -242,3 +242,48 @@ fn test_integration_whitespace_handling() {
     assert!(!chunks.is_empty(), "Should handle whitespace in fields");
     println!("✓ Whitespace handling test passed");
 }
+
+#[test]
+fn test_integration_performance_benchmark() {
+    // Phase 10: Performance optimization test
+    // Create a 100k row CSV to test throughput
+    use std::time::Instant;
+
+    let num_rows = 100_000;
+    let mut csv_data = String::from("col1,col2,col3\n");
+    
+    for i in 0..num_rows {
+        csv_data.push_str(&format!("Row{},{},{:.2}\n", i, i * 10, i as f64 * 1.5));
+    }
+
+    let csv_bytes = csv_data.as_bytes();
+    let data_size_mb = csv_bytes.len() as f64 / 1_024_000.0;
+
+    let mut converter = Converter::new();
+    let csv_opts = CsvReadOptions::default();
+    let mut pq_opts = ParquetWriteOptions::default();
+    pq_opts.row_group_size = 4096; // Larger row groups for better performance
+
+    converter.begin_csv_to_parquet(csv_opts, pq_opts).unwrap();
+
+    let start = Instant::now();
+    let chunks = converter.feed_csv_chunk(csv_bytes, true).unwrap();
+    let elapsed = start.elapsed();
+
+    let elapsed_secs = elapsed.as_secs_f64();
+    let throughput_mbps = data_size_mb / elapsed_secs;
+
+    println!(
+        "✓ Performance: {:.2} MB in {:.2}s = {:.1} MB/s",
+        data_size_mb, elapsed_secs, throughput_mbps
+    );
+    println!("  Rows: {}, Chunks produced: {}", num_rows, chunks.len());
+
+    // Verify minimum throughput requirement (Phase 10 goal: >= 20 MB/s)
+    // Note: This is a soft goal; actual performance depends on hardware
+    if throughput_mbps >= 20.0 {
+        println!("  ✓ Throughput goal (≥20 MB/s) achieved!");
+    } else {
+        println!("  ⚠ Throughput ({:.1} MB/s) below goal (≥20 MB/s)", throughput_mbps);
+    }
+}

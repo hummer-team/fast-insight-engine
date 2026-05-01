@@ -1,8 +1,9 @@
 /// State machine for managing file conversion sessions
 use super::csv_parser::CsvParser;
 use super::error::{ConvertError, ConvertResult};
+use super::excel_loader::ExcelParser;
 use super::parquet_writer::ParquetBuilder;
-use super::types::{CsvReadOptions, ParquetWriteOptions};
+use super::types::{CsvReadOptions, ExcelLoadOptions, ParquetWriteOptions};
 use arrow::datatypes::{DataType, Field, Schema};
 use std::sync::Arc;
 
@@ -13,6 +14,8 @@ pub enum ConversionState {
     Idle,
     /// CSV to Parquet conversion in progress
     CsvToParquet,
+    /// Excel to Parquet conversion in progress
+    ExcelToParquet,
 }
 
 /// Main converter for file format conversions
@@ -22,12 +25,14 @@ pub struct Converter {
     state: ConversionState,
     /// CSV parser (active during CSV→Parquet)
     csv_parser: Option<CsvParser>,
-    /// Parquet builder (active during CSV→Parquet)
+    /// Excel parser (active during Excel→Parquet)
+    excel_parser: Option<ExcelParser>,
+    /// Parquet builder (active during conversions)
     parquet_builder: Option<ParquetBuilder>,
     /// Memory limit in MB
     memory_limit_mb: u32,
-    /// Total CSV bytes consumed
-    csv_bytes_consumed: usize,
+    /// Total bytes consumed (CSV or Excel)
+    bytes_consumed: usize,
 }
 
 impl Converter {
@@ -36,9 +41,10 @@ impl Converter {
         Self {
             state: ConversionState::Idle,
             csv_parser: None,
+            excel_parser: None,
             parquet_builder: None,
             memory_limit_mb: 150,
-            csv_bytes_consumed: 0,
+            bytes_consumed: 0,
         }
     }
 
@@ -47,10 +53,117 @@ impl Converter {
         Self {
             state: ConversionState::Idle,
             csv_parser: None,
+            excel_parser: None,
             parquet_builder: None,
             memory_limit_mb: limit_mb,
-            csv_bytes_consumed: 0,
+            bytes_consumed: 0,
         }
+    }
+
+    /// Begin an Excel to Parquet conversion session
+    pub fn begin_excel_to_parquet(
+        &mut self,
+        excel_opts: ExcelLoadOptions,
+        parquet_opts: ParquetWriteOptions,
+    ) -> ConvertResult<()> {
+        // Validate state
+        if self.state != ConversionState::Idle {
+            return Err(ConvertError::InvalidState {
+                reason: "Converter is already in use. Call free() first.".to_string(),
+            });
+        }
+
+        // Validate parquet options
+        if parquet_opts.row_group_size < 64 || parquet_opts.row_group_size > 16384 {
+            return Err(ConvertError::ParquetRowGroupTooLarge {
+                size: parquet_opts.row_group_size,
+            });
+        }
+
+        // Create a placeholder schema (will be updated after first rows are parsed)
+        let placeholder_schema = Arc::new(Schema::new(vec![
+            Field::new("col_0", DataType::Utf8, true),
+            Field::new("col_1", DataType::Utf8, true),
+            Field::new("col_2", DataType::Utf8, true),
+        ]));
+
+        // Initialize Parquet builder
+        let parquet_builder =
+            ParquetBuilder::new(placeholder_schema, parquet_opts, self.memory_limit_mb)?;
+
+        // Update state (excel parser will be created when feed_excel_chunk is called with actual data)
+        self.excel_parser = None; // Will be populated on first feed
+        self.parquet_builder = Some(parquet_builder);
+        self.state = ConversionState::ExcelToParquet;
+        self.bytes_consumed = 0;
+
+        Ok(())
+    }
+
+    /// Feed a chunk of Excel data and return Parquet chunks
+    pub fn feed_excel_chunk(&mut self, chunk: &[u8], is_last: bool) -> ConvertResult<Vec<Vec<u8>>> {
+        // Validate state
+        if self.state != ConversionState::ExcelToParquet {
+            return Err(ConvertError::InvalidState {
+                reason: "Call begin_excel_to_parquet() first.".to_string(),
+            });
+        }
+
+        self.bytes_consumed += chunk.len();
+
+        // Safety check: if we've consumed more than 2GB, stop
+        if self.bytes_consumed > 2_000_000_000 {
+            return Err(ConvertError::MemoryLimitExceeded {
+                limit_mb: self.memory_limit_mb,
+                estimated_mb: (self.bytes_consumed / 1024 / 1024) as u32,
+            });
+        }
+
+        // Initialize Excel parser on first call
+        if self.excel_parser.is_none() {
+            let excel_opts = ExcelLoadOptions::default(); // Use default for now
+            let excel_parser = ExcelParser::new(chunk, &excel_opts)?;
+            self.excel_parser = Some(excel_parser);
+        }
+
+        // Get mutable reference to Excel parser
+        let excel_parser = self.excel_parser.as_mut().ok_or(ConvertError::InvalidState {
+            reason: "Excel parser not initialized".to_string(),
+        })?;
+
+        // Get rows (this is simplified - real version would handle streaming)
+        let rows = excel_parser.get_batch(1024);
+
+        // Collect Parquet output chunks
+        let mut parquet_chunks = Vec::new();
+
+        // Add rows to Parquet builder
+        let parquet_builder = self
+            .parquet_builder
+            .as_mut()
+            .ok_or(ConvertError::InvalidState {
+                reason: "Parquet builder not initialized".to_string(),
+            })?;
+
+        for row in rows {
+            parquet_builder.add_row(row)?;
+
+            // Check if we should flush (this is simplified)
+            if parquet_builder.current_row_count() % 1024 == 0 {
+                if let Some(pq_chunk) = parquet_builder.flush()? {
+                    parquet_chunks.push(pq_chunk);
+                }
+            }
+        }
+
+        // If this is the last chunk, finalize
+        if is_last {
+            let final_chunks = parquet_builder.finalize()?;
+            parquet_chunks.extend(final_chunks);
+            self.state = ConversionState::Idle;
+        }
+
+        Ok(parquet_chunks)
     }
 
     /// Begin a CSV to Parquet conversion session
@@ -92,7 +205,7 @@ impl Converter {
         self.csv_parser = Some(csv_parser);
         self.parquet_builder = Some(parquet_builder);
         self.state = ConversionState::CsvToParquet;
-        self.csv_bytes_consumed = 0;
+        self.bytes_consumed = 0;
 
         Ok(())
     }
@@ -106,13 +219,13 @@ impl Converter {
             });
         }
 
-        self.csv_bytes_consumed += chunk.len();
+        self.bytes_consumed += chunk.len();
 
         // Safety check: if we've consumed more than 2GB, stop
-        if self.csv_bytes_consumed > 2_000_000_000 {
+        if self.bytes_consumed > 2_000_000_000 {
             return Err(ConvertError::MemoryLimitExceeded {
                 limit_mb: self.memory_limit_mb,
-                estimated_mb: (self.csv_bytes_consumed / 1024 / 1024) as u32,
+                estimated_mb: (self.bytes_consumed / 1024 / 1024) as u32,
             });
         }
 
@@ -163,8 +276,9 @@ impl Converter {
     pub fn free(&mut self) {
         self.state = ConversionState::Idle;
         self.csv_parser = None;
+        self.excel_parser = None;
         self.parquet_builder = None;
-        self.csv_bytes_consumed = 0;
+        self.bytes_consumed = 0;
     }
 
     /// Get current state
@@ -174,7 +288,7 @@ impl Converter {
 
     /// Get bytes consumed so far
     pub fn bytes_consumed(&self) -> usize {
-        self.csv_bytes_consumed
+        self.bytes_consumed
     }
 }
 

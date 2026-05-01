@@ -46,7 +46,11 @@ impl ParquetBuilder {
         options: ParquetWriteOptions,
         memory_limit_mb: u32,
     ) -> ConvertResult<Self> {
-        // Validate row group size
+        // Validate row_group_size: determines memory-to-performance trade-off
+        // - Minimum 64 rows: Too small groups cause excessive metadata overhead (per row group)
+        // - Maximum 16384 rows: Larger groups optimize compression ratio and query performance
+        //   (standard Parquet best practice for balanced I/O and memory usage)
+        // Example: 1024 rows = good balance for typical data (recommended default)
         if options.row_group_size < 64 || options.row_group_size > 16384 {
             return Err(ConvertError::ParquetRowGroupTooLarge {
                 size: options.row_group_size,
@@ -181,6 +185,21 @@ impl ParquetBuilder {
     }
 
     /// Convert rows to Arrow arrays based on schema
+    /// 
+    /// # Data Type Handling
+    /// This method automatically infers and converts CSV string values to appropriate types:
+    /// - **Utf8**: Stored as-is (fallback for unparseable values)
+    /// - **Int64**: Parsed from string representation; null if parsing fails
+    /// - **Float64**: Parsed from string representation; null if parsing fails
+    ///
+    /// Rationale for type inference:
+    /// - DuckDB Wasm CAN auto-cast types during queries (e.g., CAST string to int)
+    /// - But pre-typing provides benefits:
+    ///   * Query performance: No per-query conversion overhead
+    ///   * Memory efficiency: Int64 uses less space than "123" as Utf8
+    ///   * Faster aggregations: Numeric operations directly on typed data
+    /// 
+    /// Empty strings are converted to NULL for all types (standard behavior).
     fn rows_to_arrays(&self, rows: &[Vec<String>]) -> ConvertResult<Vec<Arc<dyn Array>>> {
         let mut arrays: Vec<Arc<dyn Array>> = Vec::new();
 

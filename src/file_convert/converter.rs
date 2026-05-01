@@ -179,7 +179,10 @@ impl Converter {
             });
         }
 
-        // Validate parquet options
+        // Validate parquet options: row_group_size determines memory-to-performance trade-off
+        // - Minimum 64 rows: Too small groups cause excessive metadata overhead
+        // - Maximum 16384 rows: Larger groups optimize compression ratio and query performance
+        //   (standard Parquet practice for balanced I/O and memory usage)
         if parquet_opts.row_group_size < 64 || parquet_opts.row_group_size > 16384 {
             return Err(ConvertError::ParquetRowGroupTooLarge {
                 size: parquet_opts.row_group_size,

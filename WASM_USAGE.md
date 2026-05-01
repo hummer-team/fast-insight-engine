@@ -9,46 +9,45 @@
 import * as fastInsight from '@hummer-team/fast-insight-engine';
 ```
 
-## 四个导出函数
+## 六个导出函数
 
-### 1. CSV → Parquet 转换
+### 1. CSV → Parquet 转换 ✨ (新增)
 
 ```typescript
 const csvBytes = /* CSV file bytes */;
 
 const result = await fastInsight.convert_csv_to_parquet(
   csvBytes,
-  44,         // delimiter: b',' = 44
+  44,         // delimiter (44=',' | 9='\t' | 124='|' | 59=';')
   true,       // has_header
-  1024        // row_group_size
+  1024        // row_group_size (64-16384)
 );
 
-// result 是 Parquet 格式的 Uint8Array
+// 返回: Promise<Uint8Array> (Parquet 格式)
 ```
 
-**注意**: 在 Wasm 中暂时不可用。推荐使用：
-- DuckDB Wasm: 读取 CSV → Arrow IPC 格式
-- papaparse: 解析 CSV → JSON，手动构建 Arrow IPC
+**关键点**:
+- **在 Node.js 中**: 真正执行 CSV→Parquet 转换，调用 `file_convert::Converter`
+- **在 Wasm 中**: 返回错误提示，建议使用 DuckDB Wasm 或 papaparse
 
-### 2. Excel → Parquet 转换
+### 2. Excel → Parquet 转换 ✨ (新增)
 
 ```typescript
 const excelBytes = /* XLSX/XLS file bytes */;
 
 const result = await fastInsight.convert_excel_to_parquet(
   excelBytes,
-  "Sheet1",   // 或空字符串表示第一个 sheet
+  "Sheet1",   // sheet name (或空字符串 "" 表示第一个 sheet)
   true,       // has_header
-  1024        // row_group_size
+  1024        // row_group_size (64-16384)
 );
 
-// result 是 Parquet 格式的 Uint8Array
+// 返回: Promise<Uint8Array> (Parquet 格式)
 ```
 
-**注意**: 在 Wasm 中暂时不可用。推荐使用：
-- xlsx (SheetJS) 库: 读取 Excel 文件
-- exceljs: 读取和解析 Excel 数据
-- 手动构建 Arrow IPC 格式
+**关键点**:
+- **在 Node.js 中**: 真正执行 Excel→Parquet 转换，支持 XLSX 和 XLS 格式
+- **在 Wasm 中**: 返回错误提示，建议使用 xlsx/exceljs 库
 
 ### 3. 异常订单检测 (Isolation Forest)
 
@@ -57,11 +56,6 @@ const result = await fastInsight.convert_excel_to_parquet(
 // 其中包含特征列（price, quantity, customer_id 等）
 const data: Uint8Array = /* Arrow IPC Stream bytes */;
 
-// 使用参数:
-// - threshold: [0, 1] 的异常分数阈值（分数 >= 阈值 = 异常）
-// - scaling_mode: 0=无, 1=MinMax, 2=Standard
-// - use_gpu: false (Extended Isolation Forest 不支持 GPU)
-
 const result = await fastInsight.detect_order_anomalies(
   data,
   0.7,        // 异常分数阈值
@@ -69,46 +63,30 @@ const result = await fastInsight.detect_order_anomalies(
   false       // 不使用 GPU
 );
 
-// result 是 Arrow IPC Stream 格式的 Uint8Array，包含:
-// - order_id (Int64)
-// - abnormal_score (Float64) [0, 1]
-// - is_abnormal (Boolean)
+// result 是 Arrow IPC Stream 格式的 Uint8Array
 ```
 
 ### 4. 订单分组聚类 (K-Means)
 
 ```typescript
-// K-Means 可以使用 WebGPU 加速（Chrome 113+）
 const useGPU = rowCount > 5000 && navigator.gpu !== undefined;
 
 const result = await fastInsight.segment_customer_orders(
   data,
   5,          // 聚类数（k=5）
-  2,          // 使用 Standard scaling（推荐用于 K-Means）
-  useGPU      // 如果可用则启用 GPU，自动降级到 CPU
+  2,          // 使用 Standard scaling
+  useGPU      // 如果可用则启用 GPU
 );
-
-// result 是 Arrow IPC Stream，包含:
-// - order_id (Int64)
-// - cluster_id (Int32) [0, k-1]
 ```
 
 ### 5. 库存需求预测 (Linear Regression)
 
 ```typescript
-// 输入数据应该包含：
-// - 时间/索引列 (x)
-// - 历史需求数据 (y)
-
 const result = await fastInsight.predict_inventory_demand(
   data,
   12,         // 预测 12 个时间步
   2           // 使用 Standard scaling
 );
-
-// result 是 Arrow IPC Stream，包含:
-// - time_step (Int64)
-// - predicted_demand (Float64)
 ```
 
 ### 6. 获取版本信息
@@ -116,7 +94,6 @@ const result = await fastInsight.predict_inventory_demand(
 ```typescript
 const version = fastInsight.get_wasm_version();
 console.log(`Wasm 模块版本: ${version}`);
-// 输出: "0.1.0" 或类似
 ```
 
 ## 实际使用示例

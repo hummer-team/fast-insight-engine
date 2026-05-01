@@ -350,12 +350,14 @@ pub async fn predict_inventory_demand(
 /// * `row_group_size` - Parquet row group size (64-16384, default: 1024)
 ///
 /// # Returns
-/// * `Ok(Uint8Array)` - Parquet file bytes
-/// * `Err(JsError)` - Conversion error message
+/// * `Ok(Vec<u8>)` - Parquet file bytes (automatically converted to Uint8Array in JS)
+/// * `Err(JsValue)` - Conversion error message
 ///
 /// # Note
 /// **In Wasm builds**: Currently returns error. Use DuckDB Wasm to read CSV
 /// and convert to Arrow IPC format instead.
+/// 
+/// **In non-Wasm builds** (Node.js): Actually converts CSV to Parquet format.
 #[wasm_bindgen]
 pub async fn convert_csv_to_parquet(
     csv_data: &[u8],
@@ -374,11 +376,33 @@ pub async fn convert_csv_to_parquet(
 
     #[cfg(not(target_arch = "wasm32"))]
     {
-        // For non-Wasm builds, would use file_convert module
-        let _ = (csv_data, delimiter, has_header, row_group_size);
-        Err(JsValue::from_str(
-            "CSV to Parquet requires building with file_convert module enabled.",
-        ))
+        use crate::file_convert::{Converter, CsvReadOptions, ParquetWriteOptions};
+        
+        let mut converter = Converter::new();
+        let csv_opts = CsvReadOptions {
+            delimiter,
+            has_header,
+            null_handling: crate::file_convert::NullHandling::Null,
+        };
+        let pq_opts = ParquetWriteOptions {
+            row_group_size,
+            compression: crate::file_convert::ParquetCompression::Uncompressed,
+        };
+
+        converter.begin_csv_to_parquet(csv_opts, pq_opts)
+            .map_err(|e| JsValue::from_str(&format!("CSV conversion error: {}", e)))?;
+
+        // Process all CSV data in one chunk
+        let chunks = converter.feed_csv_chunk(csv_data, true)
+            .map_err(|e| JsValue::from_str(&format!("CSV chunk processing error: {}", e)))?;
+
+        // Concatenate all Parquet chunks into single output
+        let mut result = Vec::new();
+        for chunk in chunks {
+            result.extend_from_slice(&chunk);
+        }
+
+        Ok(result)
     }
 }
 
@@ -391,12 +415,14 @@ pub async fn convert_csv_to_parquet(
 /// * `row_group_size` - Parquet row group size (64-16384, default: 1024)
 ///
 /// # Returns
-/// * `Ok(Uint8Array)` - Parquet file bytes
-/// * `Err(JsError)` - Conversion error message
+/// * `Ok(Vec<u8>)` - Parquet file bytes (automatically converted to Uint8Array in JS)
+/// * `Err(JsValue)` - Conversion error message
 ///
 /// # Note
 /// **In Wasm builds**: Currently returns error. Use JavaScript Excel libraries
 /// (xlsx/exceljs) to read Excel file, then manually build Arrow IPC format.
+/// 
+/// **In non-Wasm builds** (Node.js): Actually converts Excel to Parquet format.
 #[wasm_bindgen]
 pub async fn convert_excel_to_parquet(
     excel_data: &[u8],
@@ -415,11 +441,36 @@ pub async fn convert_excel_to_parquet(
 
     #[cfg(not(target_arch = "wasm32"))]
     {
-        // For non-Wasm builds, would use file_convert module
-        let _ = (excel_data, sheet_name_or_index, has_header, row_group_size);
-        Err(JsValue::from_str(
-            "Excel to Parquet requires building with file_convert module enabled.",
-        ))
+        use crate::file_convert::{Converter, ExcelLoadOptions, ParquetWriteOptions, SheetSelector};
+        
+        let mut converter = Converter::new();
+        let excel_opts = ExcelLoadOptions {
+            sheet: if sheet_name_or_index.is_empty() {
+                None  // Use first sheet
+            } else {
+                Some(SheetSelector::ByName(sheet_name_or_index))
+            },
+            max_string_table_bytes: Some(100_000_000),  // 100 MB limit
+        };
+        let pq_opts = ParquetWriteOptions {
+            row_group_size,
+            compression: crate::file_convert::ParquetCompression::Uncompressed,
+        };
+
+        converter.begin_excel_to_parquet(excel_opts, pq_opts)
+            .map_err(|e| JsValue::from_str(&format!("Excel conversion error: {}", e)))?;
+
+        // Process all Excel data in one chunk
+        let chunks = converter.feed_excel_chunk(excel_data, true)
+            .map_err(|e| JsValue::from_str(&format!("Excel chunk processing error: {}", e)))?;
+
+        // Concatenate all Parquet chunks into single output
+        let mut result = Vec::new();
+        for chunk in chunks {
+            result.extend_from_slice(&chunk);
+        }
+
+        Ok(result)
     }
 }
 

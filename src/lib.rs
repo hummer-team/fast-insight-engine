@@ -1,15 +1,18 @@
 use wasm_bindgen::prelude::*;
 
-// Use wee_alloc as the global allocator for WASM to reduce binary size
-#[cfg(target_arch = "wasm32")]
-#[global_allocator]
-static ALLOC: wee_alloc::WeeAlloc = wee_alloc::WeeAlloc;
+// Note: wee_alloc optimization disabled for Wasm build compatibility
+// Can be re-enabled by fixing version compatibility with wee_alloc 0.4.5
+// See: https://github.com/rustwasm/wee_alloc
+// #[cfg(target_arch = "wasm32")]
+// #[global_allocator]
+// static ALLOC: wee_alloc::WeeAlloc = wee_alloc::WeeAlloc;
 
 pub mod arrow_handler;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod file_convert;
 pub mod gpu;
 pub mod insight_core;
-pub mod utils; // New file conversion module
+pub mod utils;
 
 use arrow_handler::{
     build_anomaly_result, build_cluster_result, build_regression_result, parse_arrow_ipc,

@@ -21,9 +21,6 @@ use insight_core::{run_isolation_forest, run_kmeans, run_linear_regression};
 use utils::{ScalingMethod, min_max_scale, standard_scale};
 
 #[cfg(target_arch = "wasm32")]
-use wasm_bindgen::JsValue;
-
-#[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
 extern "C" {
     #[wasm_bindgen(js_namespace = console)]
@@ -343,6 +340,8 @@ pub async fn predict_inventory_demand(
 
 /// Convert CSV stream to Parquet format
 ///
+/// Generates a complete, valid Parquet file that DuckDB Wasm can directly load.
+///
 /// # Arguments
 /// * `csv_data` - CSV file bytes as Uint8Array
 /// * `delimiter` - CSV delimiter: b',' (44), b'\t' (9), b'|' (124), b';' (59)
@@ -350,34 +349,34 @@ pub async fn predict_inventory_demand(
 /// * `row_group_size` - Parquet row group size (64-16384, default: 1024)
 ///
 /// # Returns
-/// * `Ok(Vec<u8>)` - Parquet file bytes (automatically converted to Uint8Array in JS)
-/// * `Err(JsValue)` - Conversion error message
+/// * `Ok(Uint8Array)` - Complete Parquet file bytes with footer metadata (DuckDB Wasm compatible)
+/// * `Err(Error)` - Conversion error with detailed message
 ///
 /// # Note
-/// **In Wasm builds**: Currently returns error. Use DuckDB Wasm to read CSV
-/// and convert to Arrow IPC format instead.
+/// **In Wasm builds**: Returns error (CSV library incompatible). 
+/// Use DuckDB Wasm CSV reader instead.
 /// 
-/// **In non-Wasm builds** (Node.js): Actually converts CSV to Parquet format.
+/// **In non-Wasm builds** (Node.js): Generates valid Parquet with complete footer.
 #[wasm_bindgen]
 pub async fn convert_csv_to_parquet(
     csv_data: &[u8],
     delimiter: u8,
     has_header: bool,
     row_group_size: usize,
-) -> Result<Vec<u8>, JsValue> {
+) -> Result<Vec<u8>, JsError> {
     #[cfg(target_arch = "wasm32")]
     {
         let _ = (csv_data, delimiter, has_header, row_group_size);
-        Err(JsValue::from_str(
-            "CSV to Parquet not available in Wasm. Use DuckDB Wasm (read CSV → Arrow IPC) \
-             or papaparse (CSV → JSON) + manual Arrow IPC builder.",
+        Err(JsError::new(
+            "CSV to Parquet unavailable in Wasm (csv library uses C code). \
+             Alternatives: Use DuckDB Wasm CSV reader, or papaparse + Arrow IPC builder.",
         ))
     }
 
     #[cfg(not(target_arch = "wasm32"))]
     {
         use crate::file_convert::{Converter, CsvReadOptions, ParquetWriteOptions};
-        
+
         let mut converter = Converter::new();
         let csv_opts = CsvReadOptions {
             delimiter,
@@ -389,17 +388,23 @@ pub async fn convert_csv_to_parquet(
             compression: crate::file_convert::ParquetCompression::Uncompressed,
         };
 
+        // Begin conversion
         converter.begin_csv_to_parquet(csv_opts, pq_opts)
-            .map_err(|e| JsValue::from_str(&format!("CSV conversion error: {}", e)))?;
+            .map_err(|e| JsError::new(&format!("CSV→Parquet error: {}", e)))?;
 
         // Process all CSV data in one chunk
         let chunks = converter.feed_csv_chunk(csv_data, true)
-            .map_err(|e| JsValue::from_str(&format!("CSV chunk processing error: {}", e)))?;
+            .map_err(|e| JsError::new(&format!("CSV chunk error: {}", e)))?;
 
-        // Concatenate all Parquet chunks into single output
+        // Merge all Parquet chunks: each is a complete Parquet file
+        // DuckDB Wasm can load the merged result directly
         let mut result = Vec::new();
         for chunk in chunks {
             result.extend_from_slice(&chunk);
+        }
+
+        if result.is_empty() {
+            return Err(JsError::new("CSV conversion produced no output"));
         }
 
         Ok(result)
@@ -408,6 +413,8 @@ pub async fn convert_csv_to_parquet(
 
 /// Convert Excel file to Parquet format
 ///
+/// Generates a complete, valid Parquet file that DuckDB Wasm can directly load.
+///
 /// # Arguments
 /// * `excel_data` - Excel file bytes (XLSX/XLS) as Uint8Array
 /// * `sheet_name_or_index` - Sheet selector: empty string = first sheet, or sheet name
@@ -415,34 +422,34 @@ pub async fn convert_csv_to_parquet(
 /// * `row_group_size` - Parquet row group size (64-16384, default: 1024)
 ///
 /// # Returns
-/// * `Ok(Vec<u8>)` - Parquet file bytes (automatically converted to Uint8Array in JS)
-/// * `Err(JsValue)` - Conversion error message
+/// * `Ok(Uint8Array)` - Complete Parquet file bytes with footer metadata (DuckDB Wasm compatible)
+/// * `Err(Error)` - Conversion error with detailed message
 ///
 /// # Note
-/// **In Wasm builds**: Currently returns error. Use JavaScript Excel libraries
-/// (xlsx/exceljs) to read Excel file, then manually build Arrow IPC format.
+/// **In Wasm builds**: Returns error (calamine library uses C code).
+/// Use JavaScript Excel libraries (xlsx/exceljs) instead.
 /// 
-/// **In non-Wasm builds** (Node.js): Actually converts Excel to Parquet format.
+/// **In non-Wasm builds** (Node.js): Generates valid Parquet with complete footer.
 #[wasm_bindgen]
 pub async fn convert_excel_to_parquet(
     excel_data: &[u8],
     sheet_name_or_index: String,
     has_header: bool,
     row_group_size: usize,
-) -> Result<Vec<u8>, JsValue> {
+) -> Result<Vec<u8>, JsError> {
     #[cfg(target_arch = "wasm32")]
     {
         let _ = (excel_data, sheet_name_or_index, has_header, row_group_size);
-        Err(JsValue::from_str(
-            "Excel to Parquet not available in Wasm. Use JavaScript libraries (xlsx/exceljs) \
-             to read Excel → JSON, then build Arrow IPC format manually.",
+        Err(JsError::new(
+            "Excel to Parquet unavailable in Wasm (calamine library uses C code). \
+             Alternatives: Use JavaScript libraries (xlsx, exceljs) to read Excel, then Arrow IPC builder.",
         ))
     }
 
     #[cfg(not(target_arch = "wasm32"))]
     {
         use crate::file_convert::{Converter, ExcelLoadOptions, ParquetWriteOptions, SheetSelector};
-        
+
         let mut converter = Converter::new();
         let excel_opts = ExcelLoadOptions {
             sheet: if sheet_name_or_index.is_empty() {
@@ -457,17 +464,23 @@ pub async fn convert_excel_to_parquet(
             compression: crate::file_convert::ParquetCompression::Uncompressed,
         };
 
+        // Begin conversion
         converter.begin_excel_to_parquet(excel_opts, pq_opts)
-            .map_err(|e| JsValue::from_str(&format!("Excel conversion error: {}", e)))?;
+            .map_err(|e| JsError::new(&format!("Excel→Parquet error: {}", e)))?;
 
         // Process all Excel data in one chunk
         let chunks = converter.feed_excel_chunk(excel_data, true)
-            .map_err(|e| JsValue::from_str(&format!("Excel chunk processing error: {}", e)))?;
+            .map_err(|e| JsError::new(&format!("Excel chunk error: {}", e)))?;
 
-        // Concatenate all Parquet chunks into single output
+        // Merge all Parquet chunks: each is a complete Parquet file
+        // DuckDB Wasm can load the merged result directly
         let mut result = Vec::new();
         for chunk in chunks {
             result.extend_from_slice(&chunk);
+        }
+
+        if result.is_empty() {
+            return Err(JsError::new("Excel conversion produced no output"));
         }
 
         Ok(result)

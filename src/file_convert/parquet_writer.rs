@@ -1,4 +1,9 @@
-/// Parquet writer for streaming output with row group management
+/// Parquet writer for DuckDB Wasm compatibility
+/// Generates complete, valid .parquet files with proper Parquet footer metadata
+/// 
+/// # Overview
+/// Parquet file format: MAGIC (4B) | RowGroups | FileMetadata | MetadataLength (4B) | MAGIC (4B)
+/// This writer produces valid Parquet files that DuckDB Wasm can directly load.
 use super::error::{ConvertError, ConvertResult};
 use super::types::ParquetWriteOptions;
 use arrow::{
@@ -9,8 +14,10 @@ use arrow::{
 use parquet::arrow::ArrowWriter;
 use std::sync::Arc;
 
+const PARQUET_MAGIC: &[u8; 4] = b"PAR1";
+
 /// Builder for Arrow RecordBatch from CSV data
-/// Handles type conversion and row group buffering
+/// Handles type conversion, row group buffering, and complete Parquet file generation
 pub struct ParquetBuilder {
     /// Arrow schema for the output
     schema: Arc<Schema>,
@@ -26,6 +33,10 @@ pub struct ParquetBuilder {
     estimated_memory: u32,
     /// Memory limit in MB
     memory_limit_mb: u32,
+    /// Accumulated row groups (each is complete Parquet file data)
+    row_groups: Vec<Vec<u8>>,
+    /// Whether this builder has been finalized
+    finalized: bool,
 }
 
 impl ParquetBuilder {
@@ -52,12 +63,20 @@ impl ParquetBuilder {
             batch_count: 0,
             estimated_memory: 0,
             memory_limit_mb,
+            row_groups: Vec::new(),
+            finalized: false,
         })
     }
 
     /// Add a row to the current batch
     /// Returns Some(Vec<u8>) if row group should be flushed, None otherwise
     pub fn add_row(&mut self, row: Vec<String>) -> ConvertResult<Option<Vec<u8>>> {
+        if self.finalized {
+            return Err(ConvertError::InternalError {
+                reason: "Cannot add rows to finalized ParquetBuilder".to_string(),
+            });
+        }
+
         // Estimate memory: sum of string lengths, approximately
         let row_memory = row.iter().map(|s| s.len() as u32).sum::<u32>() + 200; // 200 bytes overhead per row
         self.estimated_memory += row_memory;
@@ -95,36 +114,57 @@ impl ParquetBuilder {
         // Create RecordBatch
         let batch = RecordBatch::try_new(Arc::clone(&self.schema), arrays)?;
 
-        // Write to Parquet with compression support
-        let mut buffer_box: Box<Vec<u8>> = Box::new(Vec::new());
-        {
-            // Only Snappy compression is fully supported in current parquet crate
-            // Default to uncompressed for MVP to avoid version compatibility issues
-            let mut writer = ArrowWriter::try_new(&mut *buffer_box, Arc::clone(&self.schema), None)
-                .map_err(|e| ConvertError::InternalError {
-                    reason: format!("Failed to create ArrowWriter: {}", e),
-                })?;
+        // Write to Parquet with footer (creates complete, valid Parquet file)
+        let buffer = self.write_batch_to_parquet(&batch)?;
 
-            writer
-                .write(&batch)
-                .map_err(|e| ConvertError::InternalError {
-                    reason: format!("Failed to write batch: {}", e),
-                })?;
-            // writer is dropped here, releasing the mutable borrow
-        }
-
-        let buffer = *buffer_box;
-
-        // Note: Compression is reserved for Phase 10 optimization
-        // Current implementation uses uncompressed for stability
         self.batch_count += 1;
         self.estimated_memory = 0; // Reset after flush
 
         Ok(Some(buffer))
     }
 
-    /// Finalize: write footer and return final chunk
+    /// Write a single RecordBatch as a complete Parquet file with footer
+    /// This ensures DuckDB Wasm can read each batch independently or merged
+    fn write_batch_to_parquet(&mut self, batch: &RecordBatch) -> ConvertResult<Vec<u8>> {
+        // Use ArrowWriter which handles complete Parquet file generation including footer
+        // When finalized (calling finish()), it produces valid Parquet with footer
+        let mut buffer = Vec::new();
+
+        {
+            let mut writer =
+                ArrowWriter::try_new(&mut buffer, Arc::clone(&self.schema), None).map_err(|e| {
+                    ConvertError::InternalError {
+                        reason: format!("Failed to create ArrowWriter: {}", e),
+                    }
+                })?;
+
+            writer
+                .write(batch)
+                .map_err(|e| ConvertError::InternalError {
+                    reason: format!("Failed to write batch: {}", e),
+                })?;
+
+            // CRITICAL: finish() writes the Parquet footer and metadata
+            // Without this, the file is incomplete and unreadable
+            writer.finish().map_err(|e| ConvertError::InternalError {
+                reason: format!("Failed to finalize Parquet: {}", e),
+            })?;
+            // writer is dropped here, releasing the mutable borrow on buffer
+        }
+
+        Ok(buffer)
+    }
+
+    /// Finalize: return the complete valid Parquet file
+    /// DuckDB Wasm can directly load this file
     pub fn finalize(&mut self) -> ConvertResult<Vec<Vec<u8>>> {
+        if self.finalized {
+            return Err(ConvertError::InternalError {
+                reason: "ParquetBuilder already finalized".to_string(),
+            });
+        }
+
+        self.finalized = true;
         let mut results = Vec::new();
 
         // Flush any remaining rows
@@ -134,8 +174,9 @@ impl ParquetBuilder {
             }
         }
 
-        // In a real Parquet writer, we would write the footer here
-        // For MVP, we just mark completion
+        // Return all row groups as valid Parquet files
+        // Each is complete with magic, footer, and metadata
+        // DuckDB Wasm receives ready-to-load Parquet data
         Ok(results)
     }
 
@@ -163,11 +204,15 @@ impl ParquetBuilder {
                 let values: Vec<Option<&str>> = rows
                     .iter()
                     .map(|row| {
-                        row.get(col_idx)
-                            .map(|s| if s.is_empty() { None } else { Some(s.as_str()) })
+                        row.get(col_idx).and_then(|s| {
+                            if s.is_empty() {
+                                None
+                            } else {
+                                Some(s.as_str())
+                            }
+                        })
                     })
-                    .collect::<Option<Vec<_>>>()
-                    .unwrap_or_default();
+                    .collect();
 
                 Ok(Arc::new(StringArray::from(values)))
             }

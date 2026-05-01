@@ -388,8 +388,8 @@ pub async fn convert_csv_to_parquet(
             compression: crate::file_convert::ParquetCompression::Uncompressed,
         };
 
-        // Begin conversion
-        converter.begin_csv_to_parquet(csv_opts, pq_opts)
+        // Begin conversion (schema_hint = None for lenient mode - DuckDB will infer types)
+        converter.begin_csv_to_parquet(csv_opts, pq_opts, None)
             .map_err(|e| JsError::new(&format!("CSV→Parquet error: {}", e)))?;
 
         // Process all CSV data in one chunk

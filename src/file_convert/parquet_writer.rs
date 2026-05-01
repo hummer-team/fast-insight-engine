@@ -72,6 +72,67 @@ impl ParquetBuilder {
         })
     }
 
+    /// Create a Parquet builder from schema hint (optional schema definition)
+    /// 
+    /// If schema_hint is provided: strict type conversion mode
+    /// If schema_hint is None: lenient mode (all columns as Utf8, DuckDB will infer types)
+    pub fn new_with_optional_schema(
+        column_names: Vec<String>,
+        schema_hint: Option<&super::types::SchemaHint>,
+        options: ParquetWriteOptions,
+        memory_limit_mb: u32,
+    ) -> ConvertResult<Self> {
+        use arrow::datatypes::DataType;
+        use super::types::ColumnDef;
+
+        if options.row_group_size < 64 || options.row_group_size > 16384 {
+            return Err(ConvertError::ParquetRowGroupTooLarge {
+                size: options.row_group_size,
+            });
+        }
+
+        let fields = if let Some(hint) = schema_hint {
+            // Strict mode: use schema hint
+            hint.validate(column_names.len())
+                .map_err(|e| ConvertError::InvalidSchema { reason: e })?;
+
+            hint.columns
+                .iter()
+                .map(|col: &ColumnDef| {
+                    let dt = match col.type_id {
+                        0 => DataType::Utf8,
+                        1 => DataType::Int64,
+                        2 => DataType::Float64,
+                        3 => DataType::Boolean,
+                        _ => DataType::Utf8,
+                    };
+                    Field::new(&col.name, dt, true)
+                })
+                .collect::<Vec<_>>()
+        } else {
+            // Lenient mode: all columns as Utf8, let DuckDB infer types
+            column_names
+                .iter()
+                .map(|name| Field::new(name, DataType::Utf8, true))
+                .collect::<Vec<_>>()
+        };
+
+        let schema = Arc::new(Schema::new(fields));
+        let row_group_size = options.row_group_size;
+
+        Ok(Self {
+            schema,
+            row_group_size,
+            options,
+            current_batch: Vec::with_capacity(row_group_size),
+            batch_count: 0,
+            estimated_memory: 0,
+            memory_limit_mb,
+            row_groups: Vec::new(),
+            finalized: false,
+        })
+    }
+
     /// Add a row to the current batch
     /// Returns Some(Vec<u8>) if row group should be flushed, None otherwise
     pub fn add_row(&mut self, row: Vec<String>) -> ConvertResult<Option<Vec<u8>>> {
@@ -212,6 +273,9 @@ impl ParquetBuilder {
     }
 
     /// Convert a single column to Arrow array
+    /// 
+    /// In strict mode (with schema hint): converts to specified type, fails if parse fails
+    /// In lenient mode (no schema hint): keeps as Utf8, DuckDB will infer types
     fn column_to_array(
         &self,
         col_idx: usize,
@@ -220,6 +284,7 @@ impl ParquetBuilder {
     ) -> ConvertResult<Arc<dyn Array>> {
         match field.data_type() {
             DataType::Utf8 => {
+                // Lenient mode or explicit Utf8: keep original string values
                 let values: Vec<Option<&str>> = rows
                     .iter()
                     .map(|row| {
@@ -236,22 +301,34 @@ impl ParquetBuilder {
                 Ok(Arc::new(StringArray::from(values)))
             }
             DataType::Int64 => {
-                let values: Vec<Option<i64>> = rows
-                    .iter()
-                    .map(|row| {
-                        row.get(col_idx).and_then(|s| {
-                            if s.is_empty() {
-                                None
-                            } else {
-                                s.parse::<i64>().ok()
+                // Strict mode: parse to Int64, fail if conversion fails
+                let mut int_values = Vec::new();
+                
+                for row in rows {
+                    if let Some(s) = row.get(col_idx) {
+                        if s.is_empty() {
+                            int_values.push(None);
+                        } else {
+                            match s.parse::<i64>() {
+                                Ok(v) => int_values.push(Some(v)),
+                                Err(_) => {
+                                    return Err(ConvertError::TypeConversionFailed {
+                                        column: field.name().to_string(),
+                                        value: s.clone(),
+                                        target_type: "Int64".to_string(),
+                                    });
+                                }
                             }
-                        })
-                    })
-                    .collect();
+                        }
+                    } else {
+                        int_values.push(None);
+                    }
+                }
 
-                Ok(Arc::new(Int64Array::from(values)))
+                Ok(Arc::new(Int64Array::from(int_values)))
             }
             DataType::Float64 => {
+                // Strict mode: parse to Float64, fail if conversion fails
                 let values: Vec<Option<f64>> = rows
                     .iter()
                     .map(|row| {
@@ -264,6 +341,31 @@ impl ParquetBuilder {
                         })
                     })
                     .collect();
+
+                // Check for conversion failures
+                let has_failure = rows
+                    .iter()
+                    .zip(values.iter())
+                    .any(|(row, parsed)| {
+                        row.get(col_idx)
+                            .map(|s| !s.is_empty() && parsed.is_none())
+                            .unwrap_or(false)
+                    });
+
+                if has_failure {
+                    // Find first failed value
+                    for (row, parsed) in rows.iter().zip(values.iter()) {
+                        if let Some(s) = row.get(col_idx) {
+                            if !s.is_empty() && parsed.is_none() {
+                                return Err(ConvertError::TypeConversionFailed {
+                                    column: field.name().to_string(),
+                                    value: s.clone(),
+                                    target_type: "Float64".to_string(),
+                                });
+                            }
+                        }
+                    }
+                }
 
                 Ok(Arc::new(Float64Array::from(values)))
             }
@@ -287,6 +389,21 @@ impl ParquetBuilder {
     /// Get current row count in batch
     pub fn current_row_count(&self) -> usize {
         self.current_batch.len()
+    }
+
+    /// Get row group size
+    pub fn row_group_size_value(&self) -> usize {
+        self.row_group_size
+    }
+
+    /// Get parquet write options
+    pub fn parquet_options(&self) -> &ParquetWriteOptions {
+        &self.options
+    }
+
+    /// Get Arrow schema
+    pub fn arrow_schema(&self) -> &Arc<Schema> {
+        &self.schema
     }
 }
 

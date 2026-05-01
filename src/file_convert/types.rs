@@ -67,6 +67,61 @@ pub enum ParquetCompression {
     Zstd,
 }
 
+/// Schema hint for CSV conversion - defines expected column names and types
+/// Optional metadata that enables strict type conversion during CSV→Parquet
+///
+/// When provided:
+/// - Each column will be converted to its specified type
+/// - Parse failures return ConvertError (fail-fast approach)
+/// - Must match CSV column count exactly
+///
+/// When not provided:
+/// - All columns remain as Utf8 (raw string values)
+/// - DuckDB Wasm handles type inference during loading
+#[derive(Clone, Debug)]
+pub struct SchemaHint {
+    /// Column definitions (order must match CSV column order)
+    pub columns: Vec<ColumnDef>,
+}
+
+/// Column type definition for schema hints
+#[derive(Clone, Debug)]
+pub struct ColumnDef {
+    /// Column name (will override CSV header or col_N)
+    pub name: String,
+    /// Data type: 0=Utf8, 1=Int64, 2=Float64, 3=Boolean, 4=Date, others=Utf8(default)
+    pub type_id: u8,
+}
+
+impl SchemaHint {
+    /// Create a new schema hint with given columns
+    pub fn new(columns: Vec<ColumnDef>) -> Self {
+        Self { columns }
+    }
+
+    /// Validate schema hint against column count
+    pub fn validate(&self, expected_column_count: usize) -> Result<(), String> {
+        if self.columns.is_empty() {
+            return Err("SchemaHint must have at least one column".to_string());
+        }
+        if self.columns.len() != expected_column_count {
+            return Err(format!(
+                "SchemaHint column count {} does not match CSV column count {}",
+                self.columns.len(),
+                expected_column_count
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl ColumnDef {
+    /// Create a new column definition
+    pub fn new(name: String, type_id: u8) -> Self {
+        Self { name, type_id }
+    }
+}
+
 impl Default for CsvReadOptions {
     fn default() -> Self {
         Self {

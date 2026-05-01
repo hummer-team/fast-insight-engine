@@ -14,8 +14,8 @@ pub use converter::{ConversionState, Converter};
 pub use error::{ConvertError, ConvertResult};
 pub use excel_loader::ExcelParser;
 pub use types::{
-    CsvReadOptions, CsvWriteOptions, ExcelLoadOptions, NullHandling, ParquetCompression,
-    ParquetWriteOptions, SheetSelector,
+    ColumnDef, CsvReadOptions, CsvWriteOptions, ExcelLoadOptions, NullHandling, ParquetCompression,
+    ParquetWriteOptions, SchemaHint, SheetSelector,
 };
 
 #[cfg(test)]

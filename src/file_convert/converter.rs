@@ -29,6 +29,8 @@ pub struct Converter {
     excel_parser: Option<ExcelParser>,
     /// Parquet builder (active during conversions)
     parquet_builder: Option<ParquetBuilder>,
+    /// Optional schema hint for CSV columns (for strict type conversion)
+    schema_hint: Option<super::types::SchemaHint>,
     /// Memory limit in MB
     memory_limit_mb: u32,
     /// Total bytes consumed (CSV or Excel)
@@ -43,6 +45,7 @@ impl Converter {
             csv_parser: None,
             excel_parser: None,
             parquet_builder: None,
+            schema_hint: None,
             memory_limit_mb: 150,
             bytes_consumed: 0,
         }
@@ -55,6 +58,7 @@ impl Converter {
             csv_parser: None,
             excel_parser: None,
             parquet_builder: None,
+            schema_hint: None,
             memory_limit_mb: limit_mb,
             bytes_consumed: 0,
         }
@@ -171,6 +175,7 @@ impl Converter {
         &mut self,
         csv_opts: CsvReadOptions,
         parquet_opts: ParquetWriteOptions,
+        schema_hint: Option<&super::types::SchemaHint>,
     ) -> ConvertResult<()> {
         // Validate state
         if self.state != ConversionState::Idle {
@@ -192,8 +197,8 @@ impl Converter {
         // Initialize CSV parser
         let csv_parser = CsvParser::new(csv_opts);
 
-        // Create a placeholder schema (will be updated after first rows are parsed)
-        // For now, assume 3 columns of UTF-8
+        // Store schema hint for later use in feed_csv_chunk
+        // It will be applied after column names are inferred from CSV header
         let placeholder_schema = Arc::new(Schema::new(vec![
             Field::new("col_0", DataType::Utf8, true),
             Field::new("col_1", DataType::Utf8, true),
@@ -207,6 +212,7 @@ impl Converter {
         // Update state
         self.csv_parser = Some(csv_parser);
         self.parquet_builder = Some(parquet_builder);
+        self.schema_hint = schema_hint.cloned();
         self.state = ConversionState::CsvToParquet;
         self.bytes_consumed = 0;
 
@@ -243,10 +249,42 @@ impl Converter {
         // Collect Parquet output chunks
         let mut parquet_chunks = Vec::new();
 
-        // Update schema if it was just inferred
+        // Update schema based on CSV header when first inferred
         if csv_parser.schema_inferred() && self.parquet_builder.is_some() {
-            // In MVP, we skip schema update for simplicity
-            // In full version, would reconstruct ParquetBuilder with correct schema
+            let mut needs_rebuild = false;
+            
+            // Check if builder still has placeholder schema
+            if let Some(pb) = self.parquet_builder.as_ref() {
+                let fields = pb.arrow_schema().fields();
+                needs_rebuild = fields.len() > 0 
+                    && fields[0].name().starts_with("col_")
+                    && fields.iter().enumerate().all(|(i, f)| f.name() == &format!("col_{}", i));
+            }
+
+            if needs_rebuild {
+                // Get the inferred column names
+                let col_names = csv_parser.inferred_columns().map(|v| v.clone()).unwrap_or_default();
+                
+                // Extract parquet options from current builder
+                let opts = if let Some(pb) = self.parquet_builder.take() {
+                    ParquetWriteOptions {
+                        row_group_size: pb.row_group_size_value(),
+                        compression: pb.parquet_options().compression,
+                    }
+                } else {
+                    ParquetWriteOptions::default()
+                };
+
+                // Create new builder with correct schema
+                let new_builder = ParquetBuilder::new_with_optional_schema(
+                    col_names,
+                    self.schema_hint.as_ref(),
+                    opts,
+                    self.memory_limit_mb,
+                )?;
+
+                self.parquet_builder = Some(new_builder);
+            }
         }
 
         // Add rows to Parquet builder
@@ -281,6 +319,7 @@ impl Converter {
         self.csv_parser = None;
         self.excel_parser = None;
         self.parquet_builder = None;
+        self.schema_hint = None;
         self.bytes_consumed = 0;
     }
 
@@ -340,7 +379,7 @@ mod tests {
         let mut pq_opts = ParquetWriteOptions::default();
         pq_opts.row_group_size = 20000;
 
-        let result = converter.begin_csv_to_parquet(csv_opts, pq_opts);
+        let result = converter.begin_csv_to_parquet(csv_opts, pq_opts, None);
         assert!(result.is_err());
     }
 
@@ -353,7 +392,7 @@ mod tests {
         let csv_opts = CsvReadOptions::default();
         let pq_opts = ParquetWriteOptions::default();
 
-        converter.begin_csv_to_parquet(csv_opts, pq_opts).unwrap();
+        converter.begin_csv_to_parquet(csv_opts, pq_opts, None).unwrap();
         let chunks = converter.feed_csv_chunk(csv_data, true).unwrap();
 
         // Should produce some Parquet output
@@ -371,14 +410,14 @@ mod tests {
 
         // First conversion
         converter
-            .begin_csv_to_parquet(csv_opts.clone(), pq_opts.clone())
+            .begin_csv_to_parquet(csv_opts.clone(), pq_opts.clone(), None)
             .unwrap();
         converter.feed_csv_chunk(csv_data, true).unwrap();
         converter.free();
 
         // Should be able to start new session
         assert_eq!(converter.state(), ConversionState::Idle);
-        converter.begin_csv_to_parquet(csv_opts, pq_opts).unwrap();
+        converter.begin_csv_to_parquet(csv_opts, pq_opts, None).unwrap();
         assert_eq!(converter.state(), ConversionState::CsvToParquet);
     }
 
@@ -389,9 +428,9 @@ mod tests {
         let pq_opts = ParquetWriteOptions::default();
 
         converter
-            .begin_csv_to_parquet(csv_opts.clone(), pq_opts.clone())
+            .begin_csv_to_parquet(csv_opts.clone(), pq_opts.clone(), None)
             .unwrap();
-        let result = converter.begin_csv_to_parquet(csv_opts, pq_opts);
+        let result = converter.begin_csv_to_parquet(csv_opts, pq_opts, None);
         assert!(result.is_err());
     }
 }

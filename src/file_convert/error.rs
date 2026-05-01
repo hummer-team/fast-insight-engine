@@ -20,6 +20,10 @@ pub enum ConvertError {
     MemoryLimitExceeded { limit_mb: u32, estimated_mb: u32 },
     /// Invalid state (e.g., feed without begin)
     InvalidState { reason: String },
+    /// Invalid schema or schema hint
+    InvalidSchema { reason: String },
+    /// Type conversion failed (when schema hint is provided)
+    TypeConversionFailed { column: String, value: String, target_type: String },
     /// Internal error (should not happen)
     InternalError { reason: String },
 }
@@ -81,6 +85,17 @@ impl fmt::Display for ConvertError {
             }
             Self::InvalidState { reason } => {
                 write!(f, "InvalidState: {}. Fix: Check call sequence.", reason)
+            }
+            Self::InvalidSchema { reason } => {
+                write!(f, "InvalidSchema: {}. Fix: Verify schema hint matches CSV.", reason)
+            }
+            Self::TypeConversionFailed { column, value, target_type } => {
+                write!(
+                    f,
+                    "TypeConversionFailed: Cannot convert '{}' to {} for column '{}'. \
+                     Fix: Verify schemaHint types match CSV data.",
+                    value, target_type, column
+                )
             }
             Self::InternalError { reason } => {
                 write!(f, "InternalError: {}. Please report this issue.", reason)

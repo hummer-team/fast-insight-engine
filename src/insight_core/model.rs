@@ -295,6 +295,18 @@ fn build_feature_matrix(t: &[f64], mode: &PredictionMode) -> Result<Array2<f64>,
         ));
     }
 
+    // Validate period > 0 for seasonal modes to prevent division by zero (NaN features)
+    match mode {
+        PredictionMode::Seasonal { period } | PredictionMode::Ensemble { period, .. } => {
+            if *period == 0 {
+                return Err(AnalysisError::ValidationError(
+                    "season period must be > 0 for Seasonal and Ensemble modes".to_string(),
+                ));
+            }
+        }
+        _ => {}
+    }
+
     let tau = 2.0 * std::f64::consts::PI;
 
     let (data, ncols): (Vec<f64>, usize) = match mode {
@@ -561,5 +573,21 @@ mod tests {
         )
         .unwrap();
         assert_eq!(mat.shape(), &[3, 4]); // [t, t², sin, cos]
+    }
+
+    #[test]
+    fn test_build_feature_matrix_empty_t_error() {
+        let result = build_feature_matrix(&[], &PredictionMode::Linear);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_build_feature_matrix_period_zero_error() {
+        let t = vec![0.0, 1.0, 2.0];
+        let result = build_feature_matrix(&t, &PredictionMode::Seasonal { period: 0 });
+        assert!(result.is_err());
+
+        let result2 = build_feature_matrix(&t, &PredictionMode::Ensemble { degree: 2, period: 0 });
+        assert!(result2.is_err());
     }
 }

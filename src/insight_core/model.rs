@@ -6,6 +6,53 @@ use ndarray::{Array1, Array2};
 
 use crate::utils::{AnalysisError, validate_threshold};
 
+/// Controls the feature engineering strategy used for inventory demand prediction.
+///
+/// All modes use ordinary least squares (OLS) regression internally — only the
+/// feature matrix differs. Higher-order modes can model non-linear and seasonal
+/// patterns that plain linear regression misses.
+#[derive(Debug, Clone, PartialEq)]
+pub enum PredictionMode {
+    /// `y = a + b·t` — straight-line trend (existing behavior)
+    Linear,
+    /// `y = a + b·t + c·t²` — polynomial trend (degree=2 only)
+    ///
+    /// Use for S-curves, saturation, or accelerating/decelerating growth.
+    Polynomial { degree: u8 },
+    /// `y = a + b·t + c·sin(2πt/P) + d·cos(2πt/P)` — trend + one Fourier term
+    ///
+    /// Use when demand has a known periodic cycle (e.g., period=7 for weekly).
+    Seasonal { period: u32 },
+    /// `y = a + b·t + c·t² + d·sin(2πt/P) + e·cos(2πt/P)` — full decomposition
+    ///
+    /// Combines polynomial trend with seasonal cycle. Recommended default for
+    /// real-world inventory data with both non-linear growth and periodic patterns.
+    Ensemble { degree: u8, period: u32 },
+}
+
+impl PredictionMode {
+    /// Convert from Wasm-compatible `(mode_u8, season_period_u32)` pair.
+    ///
+    /// | mode | variant |
+    /// |------|---------|
+    /// | 0    | Linear |
+    /// | 1    | Polynomial { degree: 2 } |
+    /// | 2    | Seasonal { period } |
+    /// | 3    | Ensemble { degree: 2, period } |
+    /// | other | Linear (graceful fallback) |
+    ///
+    /// `season_period = 0` auto-defaults to `7` (weekly cycle).
+    pub fn from_params(mode: u8, season_period: u32) -> Self {
+        let period = if season_period == 0 { 7 } else { season_period };
+        match mode {
+            1 => PredictionMode::Polynomial { degree: 2 },
+            2 => PredictionMode::Seasonal { period },
+            3 => PredictionMode::Ensemble { degree: 2, period },
+            _ => PredictionMode::Linear,
+        }
+    }
+}
+
 /// Run Isolation Forest anomaly detection using Extended Isolation Forest
 ///
 /// # Arguments

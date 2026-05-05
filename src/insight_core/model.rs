@@ -11,7 +11,7 @@ use crate::utils::{AnalysisError, validate_threshold};
 /// All modes use ordinary least squares (OLS) regression internally — only the
 /// feature matrix differs. Higher-order modes can model non-linear and seasonal
 /// patterns that plain linear regression misses.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PredictionMode {
     /// `y = a + b·t` — straight-line trend (existing behavior)
     Linear,

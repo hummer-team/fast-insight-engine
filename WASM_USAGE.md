@@ -90,39 +90,92 @@ const result = await fastInsight.segment_customer_orders(
 | `2` | Seasonal | 周期性波动（需设置 `season_period`） |
 | `3` | Ensemble | 多项式 + 季节性（推荐用于生产环境） |
 
+#### 输入格式
+
+`data` 为 **Arrow IPC Stream**（`Uint8Array`），必须包含 **至少 2 列 Float64**：
+
+| 列索引 | 列名（任意） | 说明 |
+|---|---|---|
+| col[0] | `time_index` | 时间占位列，**值被忽略**，传全 0 即可 |
+| col[1] | `demand` | 历史需求量，**实际用于训练** |
+
+#### 输出格式
+
+返回 **Arrow IPC Stream**（`Uint8Array`），包含 **1 列**：
+
+| 列名 | 类型 | 说明 |
+|---|---|---|
+| `prediction` | Float64 | 未来 `predict_steps` 个时间步的预测值 |
+
+#### 完整示例
+
+以 12 个月历史销售数据预测未来 3 个月为例：
+
 ```typescript
-// Mode 0 — 线性（与旧版兼容，season_period 忽略）
-const result = await fastInsight.predict_inventory_demand(
-  data,
-  12,   // 预测步数
-  2,    // scaling: 0=None, 1=MinMax, 2=Standard
-  0,    // prediction_mode: Linear
-  0     // season_period: 忽略
-);
+import init, * as fastInsight from './pkg/fast_insight_engine.js';
+import {
+  tableFromIPC,
+  tableToIPC,
+  Table,
+  Schema,
+  Field,
+  Float64,
+  makeData,
+} from 'apache-arrow';
 
-// Mode 1 — 多项式（适合 S 型增长）
-const result = await fastInsight.predict_inventory_demand(
-  data, 12, 0,
-  1,    // Polynomial
-  0
-);
+async function forecastDemand() {
+  await init();
 
-// Mode 2 — 季节性（周期 = 7 天）
-const result = await fastInsight.predict_inventory_demand(
-  data, 12, 0,
-  2,    // Seasonal
-  7     // season_period: 7=周粒度, 30=月粒度
-);
+  // 1. 准备历史需求数据（12 个月）
+  const historicalDemand = [
+    120, 135, 128, 142, 160, 175,
+    168, 183, 195, 210, 225, 238,
+  ];
 
-// Mode 3 — Ensemble，推荐（多项式 + 季节性，月粒度）
-const result = await fastInsight.predict_inventory_demand(
-  data, 12, 0,
-  3,    // Ensemble
-  30    // season_period: 30 天为一个周期
-);
+  // col[0]: 时间占位列（值任意，函数内部忽略，传全 0 即可）
+  // col[1]: 历史需求量（实际训练用）
+  const timePlaceholder = new Float64Array(historicalDemand.length).fill(0);
+  const demandValues    = new Float64Array(historicalDemand);
+
+  // 2. 序列化为 Arrow IPC Stream
+  const schema = new Schema([
+    Field.new('time_index', new Float64()),
+    Field.new('demand',     new Float64()),
+  ]);
+
+  const inputTable = new Table(schema, [
+    makeData({ type: new Float64(), data: timePlaceholder }),
+    makeData({ type: new Float64(), data: demandValues }),
+  ]);
+
+  const inputBytes = tableToIPC(inputTable, 'stream'); // Uint8Array
+
+  // 3. 调用预测（Ensemble 模式，年周期=12 个月）
+  const outputBytes = await fastInsight.predict_inventory_demand(
+    inputBytes,
+    3,    // predict_steps: 预测未来 3 个月
+    0,    // scaling_mode:  0=None, 1=MinMax, 2=Standard
+    3,    // prediction_mode: 3=Ensemble（推荐）
+    12    // season_period: 12=年周期（月粒度）
+  );
+
+  // 4. 解析输出
+  const resultTable = tableFromIPC(outputBytes);
+  const predictions = Array.from(
+    resultTable.getChild('prediction')!.toArray() as Float64Array
+  );
+
+  console.log('未来 3 个月预测需求:', predictions);
+  // 示例输出 → [251.4, 264.8, 278.2]
+}
+
+forecastDemand().catch(console.error);
 ```
 
-> **提示**：`season_period=0` 时自动使用 7（周粒度默认值）。对于大数据集（>10k 行）建议在 Web Worker 中调用以避免阻塞主线程。
+> **提示**：
+> - `season_period=0` 时自动默认为 7（周粒度）
+> - 对于大数据集（>10k 行）建议在 Web Worker 中调用以避免阻塞主线程
+> - `prediction_mode=0` 与旧版线性回归行为完全兼容
 
 ### 6. 获取版本信息
 

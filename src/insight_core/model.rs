@@ -277,6 +277,57 @@ pub fn run_kmeans(features: Array2<f64>, n_clusters: usize) -> Result<Vec<usize>
     Ok(cluster_ids)
 }
 
+/// Build the feature matrix for a given time index slice and prediction mode.
+///
+/// Column layout by mode:
+/// - Linear:     `[t]`               → shape (n, 1)
+/// - Polynomial: `[t, t²]`           → shape (n, 2)
+/// - Seasonal:   `[t, sin, cos]`     → shape (n, 3)
+/// - Ensemble:   `[t, t², sin, cos]` → shape (n, 4)
+///
+/// The intercept term is handled internally by `linfa_linear`, so it is NOT
+/// included in this matrix.
+fn build_feature_matrix(t: &[f64], mode: &PredictionMode) -> Result<Array2<f64>, AnalysisError> {
+    let n = t.len();
+    if n == 0 {
+        return Err(AnalysisError::ValidationError(
+            "empty time index".to_string(),
+        ));
+    }
+
+    let tau = 2.0 * std::f64::consts::PI;
+
+    let (data, ncols): (Vec<f64>, usize) = match mode {
+        PredictionMode::Linear => (t.to_vec(), 1),
+
+        PredictionMode::Polynomial { .. } => {
+            let data: Vec<f64> = t.iter().flat_map(|&ti| [ti, ti * ti]).collect();
+            (data, 2)
+        }
+
+        PredictionMode::Seasonal { period } => {
+            let p = *period as f64;
+            let data: Vec<f64> = t
+                .iter()
+                .flat_map(|&ti| [ti, (tau * ti / p).sin(), (tau * ti / p).cos()])
+                .collect();
+            (data, 3)
+        }
+
+        PredictionMode::Ensemble { period, .. } => {
+            let p = *period as f64;
+            let data: Vec<f64> = t
+                .iter()
+                .flat_map(|&ti| [ti, ti * ti, (tau * ti / p).sin(), (tau * ti / p).cos()])
+                .collect();
+            (data, 4)
+        }
+    };
+
+    Array2::from_shape_vec((n, ncols), data)
+        .map_err(|e| AnalysisError::ModelError(format!("failed to build feature matrix: {}", e)))
+}
+
 /// Run Linear Regression prediction
 ///
 /// # Arguments
@@ -460,5 +511,55 @@ mod tests {
         let y = arr1(&[1.0]);
 
         assert!(run_linear_regression(x, y, 0).is_err());
+    }
+
+    // ─── build_feature_matrix tests ───────────────────────────────────────────
+
+    #[test]
+    fn test_build_feature_matrix_linear_shape() {
+        let t = vec![0.0, 1.0, 2.0, 3.0];
+        let mat = build_feature_matrix(&t, &PredictionMode::Linear).unwrap();
+        assert_eq!(mat.shape(), &[4, 1]);
+        assert_eq!(mat[[0, 0]], 0.0);
+        assert_eq!(mat[[3, 0]], 3.0);
+    }
+
+    #[test]
+    fn test_build_feature_matrix_polynomial_values() {
+        let t = vec![0.0, 1.0, 2.0, 3.0];
+        let mat = build_feature_matrix(&t, &PredictionMode::Polynomial { degree: 2 }).unwrap();
+        assert_eq!(mat.shape(), &[4, 2]);
+        // Second column = t²
+        assert_eq!(mat[[0, 1]], 0.0);
+        assert_eq!(mat[[1, 1]], 1.0);
+        assert_eq!(mat[[2, 1]], 4.0);
+        assert_eq!(mat[[3, 1]], 9.0);
+    }
+
+    #[test]
+    fn test_build_feature_matrix_seasonal_shape_and_values() {
+        let t = vec![0.0, 1.0, 2.0, 3.0];
+        let mat = build_feature_matrix(&t, &PredictionMode::Seasonal { period: 4 }).unwrap();
+        assert_eq!(mat.shape(), &[4, 3]);
+        // t=0: sin(0)=0, cos(0)=1
+        assert!((mat[[0, 1]] - 0.0).abs() < 1e-10); // sin
+        assert!((mat[[0, 2]] - 1.0).abs() < 1e-10); // cos
+        // t=1, P=4: sin(π/2)=1, cos(π/2)=0
+        assert!((mat[[1, 1]] - 1.0).abs() < 1e-10);
+        assert!((mat[[1, 2]] - 0.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_build_feature_matrix_ensemble_shape() {
+        let t = vec![0.0, 1.0, 2.0];
+        let mat = build_feature_matrix(
+            &t,
+            &PredictionMode::Ensemble {
+                degree: 2,
+                period: 7,
+            },
+        )
+        .unwrap();
+        assert_eq!(mat.shape(), &[3, 4]); // [t, t², sin, cos]
     }
 }

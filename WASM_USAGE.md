@@ -79,15 +79,50 @@ const result = await fastInsight.segment_customer_orders(
 );
 ```
 
-### 5. 库存需求预测 (Linear Regression)
+### 5. 库存需求预测 (Multi-mode Regression)
+
+支持四种预测模式，通过 `prediction_mode` 和 `season_period` 参数控制：
+
+| `prediction_mode` | 模式 | 适用场景 |
+|---|---|---|
+| `0` | Linear | 稳定增长/下降趋势 |
+| `1` | Polynomial | S 型增长、需求饱和 |
+| `2` | Seasonal | 周期性波动（需设置 `season_period`） |
+| `3` | Ensemble | 多项式 + 季节性（推荐用于生产环境） |
 
 ```typescript
+// Mode 0 — 线性（与旧版兼容，season_period 忽略）
 const result = await fastInsight.predict_inventory_demand(
   data,
-  12,         // 预测 12 个时间步
-  2           // 使用 Standard scaling
+  12,   // 预测步数
+  2,    // scaling: 0=None, 1=MinMax, 2=Standard
+  0,    // prediction_mode: Linear
+  0     // season_period: 忽略
+);
+
+// Mode 1 — 多项式（适合 S 型增长）
+const result = await fastInsight.predict_inventory_demand(
+  data, 12, 0,
+  1,    // Polynomial
+  0
+);
+
+// Mode 2 — 季节性（周期 = 7 天）
+const result = await fastInsight.predict_inventory_demand(
+  data, 12, 0,
+  2,    // Seasonal
+  7     // season_period: 7=周粒度, 30=月粒度
+);
+
+// Mode 3 — Ensemble，推荐（多项式 + 季节性，月粒度）
+const result = await fastInsight.predict_inventory_demand(
+  data, 12, 0,
+  3,    // Ensemble
+  30    // season_period: 30 天为一个周期
 );
 ```
+
+> **提示**：`season_period=0` 时自动使用 7（周粒度默认值）。对于大数据集（>10k 行）建议在 Web Worker 中调用以避免阻塞主线程。
 
 ### 6. 获取版本信息
 

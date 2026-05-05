@@ -187,7 +187,7 @@ forecastDemand().catch(console.error);
 predict_inventory_demand_batch(
   data: Uint8Array,        // Arrow IPC Stream 格式输入
   predict_steps: number,   // 每个SKU预测步数 (≥ 1)
-  mode: string,            // 预测模式: "linear" | "polynomial_2" | "polynomial_3" | "exponential"
+  mode: string,            // 预测模式: "linear" | "polynomial_2" | "polynomial_3" | "seasonal_7" | "ensemble"
   scaling: string,         // 缩放方式: "none" | "min_max" | "standard"
   threshold: number        // 保留参数，传 0.0
 ): Promise<Uint8Array>     // Arrow IPC Stream 格式输出

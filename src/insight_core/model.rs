@@ -312,9 +312,13 @@ fn build_feature_matrix(t: &[f64], mode: &PredictionMode) -> Result<Array2<f64>,
     let (data, ncols): (Vec<f64>, usize) = match mode {
         PredictionMode::Linear => (t.to_vec(), 1),
 
-        PredictionMode::Polynomial { .. } => {
-            let data: Vec<f64> = t.iter().flat_map(|&ti| [ti, ti * ti]).collect();
-            (data, 2)
+        PredictionMode::Polynomial { degree } => {
+            let cols = *degree as usize;
+            let data: Vec<f64> = t
+                .iter()
+                .flat_map(|&ti| (1..=cols).map(move |d| ti.powi(d as i32)))
+                .collect();
+            (data, cols)
         }
 
         PredictionMode::Seasonal { period } => {
@@ -643,7 +647,13 @@ mod tests {
         let result = build_feature_matrix(&t, &PredictionMode::Seasonal { period: 0 });
         assert!(result.is_err());
 
-        let result2 = build_feature_matrix(&t, &PredictionMode::Ensemble { degree: 2, period: 0 });
+        let result2 = build_feature_matrix(
+            &t,
+            &PredictionMode::Ensemble {
+                degree: 2,
+                period: 0,
+            },
+        );
         assert!(result2.is_err());
     }
 
@@ -652,11 +662,26 @@ mod tests {
     #[test]
     fn test_prediction_mode_from_params() {
         assert_eq!(PredictionMode::from_params(0, 7), PredictionMode::Linear);
-        assert_eq!(PredictionMode::from_params(1, 0), PredictionMode::Polynomial { degree: 2 });
-        assert_eq!(PredictionMode::from_params(2, 7), PredictionMode::Seasonal { period: 7 });
+        assert_eq!(
+            PredictionMode::from_params(1, 0),
+            PredictionMode::Polynomial { degree: 2 }
+        );
+        assert_eq!(
+            PredictionMode::from_params(2, 7),
+            PredictionMode::Seasonal { period: 7 }
+        );
         // mode=2 with season_period=0 → auto-defaults to period=7
-        assert_eq!(PredictionMode::from_params(2, 0), PredictionMode::Seasonal { period: 7 });
-        assert_eq!(PredictionMode::from_params(3, 30), PredictionMode::Ensemble { degree: 2, period: 30 });
+        assert_eq!(
+            PredictionMode::from_params(2, 0),
+            PredictionMode::Seasonal { period: 7 }
+        );
+        assert_eq!(
+            PredictionMode::from_params(3, 30),
+            PredictionMode::Ensemble {
+                degree: 2,
+                period: 30
+            }
+        );
         // Unknown mode → Linear fallback
         assert_eq!(PredictionMode::from_params(99, 7), PredictionMode::Linear);
     }
@@ -669,19 +694,40 @@ mod tests {
         let y = arr1(&[0.0, 2.0, 4.0, 6.0]);
         let preds = run_regression_with_mode(y, 3, PredictionMode::Linear).unwrap();
         assert_eq!(preds.len(), 3);
-        assert!((preds[0] - 8.0).abs() < 0.5, "expected ~8, got {}", preds[0]);
-        assert!((preds[1] - 10.0).abs() < 0.5, "expected ~10, got {}", preds[1]);
-        assert!((preds[2] - 12.0).abs() < 0.5, "expected ~12, got {}", preds[2]);
+        assert!(
+            (preds[0] - 8.0).abs() < 0.5,
+            "expected ~8, got {}",
+            preds[0]
+        );
+        assert!(
+            (preds[1] - 10.0).abs() < 0.5,
+            "expected ~10, got {}",
+            preds[1]
+        );
+        assert!(
+            (preds[2] - 12.0).abs() < 0.5,
+            "expected ~12, got {}",
+            preds[2]
+        );
     }
 
     #[test]
     fn test_run_regression_polynomial_mode_accuracy() {
         // y = t²  →  train on t=0..4, predict t=5,6 → expect ~25, 36
         let y = arr1(&[0.0, 1.0, 4.0, 9.0, 16.0]);
-        let preds = run_regression_with_mode(y, 2, PredictionMode::Polynomial { degree: 2 }).unwrap();
+        let preds =
+            run_regression_with_mode(y, 2, PredictionMode::Polynomial { degree: 2 }).unwrap();
         assert_eq!(preds.len(), 2);
-        assert!((preds[0] - 25.0).abs() < 1.0, "expected ~25, got {}", preds[0]);
-        assert!((preds[1] - 36.0).abs() < 1.0, "expected ~36, got {}", preds[1]);
+        assert!(
+            (preds[0] - 25.0).abs() < 1.0,
+            "expected ~25, got {}",
+            preds[0]
+        );
+        assert!(
+            (preds[1] - 36.0).abs() < 1.0,
+            "expected ~36, got {}",
+            preds[1]
+        );
     }
 
     #[test]
@@ -707,13 +753,24 @@ mod tests {
         let preds = run_regression_with_mode(
             y,
             2,
-            PredictionMode::Ensemble { degree: 2, period: 4 },
+            PredictionMode::Ensemble {
+                degree: 2,
+                period: 4,
+            },
         )
         .unwrap();
         assert_eq!(preds.len(), 2);
         // t=8: 8 + sin(4π) ≈ 8.0; t=9: 9 + sin(4.5π) ≈ 10.0
-        assert!((preds[0] - 8.0).abs() < 1.5, "expected ~8, got {}", preds[0]);
-        assert!((preds[1] - 10.0).abs() < 1.5, "expected ~10, got {}", preds[1]);
+        assert!(
+            (preds[0] - 8.0).abs() < 1.5,
+            "expected ~8, got {}",
+            preds[0]
+        );
+        assert!(
+            (preds[1] - 10.0).abs() < 1.5,
+            "expected ~10, got {}",
+            preds[1]
+        );
     }
 
     #[test]

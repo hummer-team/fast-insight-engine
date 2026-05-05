@@ -98,6 +98,119 @@ pub fn parse_arrow_ipc(data: &[u8]) -> Result<ParsedData, AnalysisError> {
     })
 }
 
+/// Parse Arrow IPC Stream data for batch inventory demand forecasting.
+///
+/// Expects three columns: `sku_id` (Utf8), `time_index` (Float64), `demand` (Float64).
+///
+/// # Arguments
+/// * `data` - Raw bytes in Arrow IPC Stream format
+///
+/// # Returns
+/// * `Ok(ParsedData)` with `order_ids` (sku_id values) and `features` matrix of shape `[n_rows, 2]`
+/// * `Err(AnalysisError::ValidationError)` if schema is invalid or input is empty
+/// * `Err(AnalysisError::ArrowError)` if IPC parsing fails
+pub fn parse_batch_arrow_ipc(data: &[u8]) -> Result<ParsedData, AnalysisError> {
+    let cursor = Cursor::new(data);
+    let reader = StreamReader::try_new(cursor, None)
+        .map_err(|e| AnalysisError::ArrowError(format!("failed to create StreamReader: {}", e)))?;
+
+    validate_batch_schema(reader.schema())?;
+
+    let mut order_ids: Vec<String> = Vec::new();
+    let mut feature_rows: Vec<f64> = Vec::new();
+
+    for batch_result in reader {
+        let batch = batch_result
+            .map_err(|e| AnalysisError::ArrowError(format!("failed to read batch: {}", e)))?;
+
+        let str_array = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .ok_or_else(|| {
+                AnalysisError::ValidationError("sku_id column is not Utf8".to_string())
+            })?;
+
+        for i in 0..batch.num_rows() {
+            order_ids.push(str_array.value(i).to_string());
+            let time_index = extract_float64_value(batch.column(1), i)?;
+            let demand = extract_float64_value(batch.column(2), i)?;
+            feature_rows.push(time_index);
+            feature_rows.push(demand);
+        }
+    }
+
+    if order_ids.is_empty() {
+        return Err(AnalysisError::ValidationError(
+            "input data is empty".to_string(),
+        ));
+    }
+
+    let n_rows = order_ids.len();
+    let features = Array2::from_shape_vec((n_rows, 2), feature_rows)
+        .map_err(|e| AnalysisError::ArrowError(format!("failed to create Array2: {}", e)))?;
+
+    Ok(ParsedData {
+        order_ids,
+        features,
+    })
+}
+
+/// Validate Arrow schema for batch IPC: requires sku_id (Utf8), time_index (Float64), demand (Float64)
+fn validate_batch_schema(schema: Arc<Schema>) -> Result<(), AnalysisError> {
+    let fields = schema.fields();
+    if fields.len() < 3 {
+        return Err(AnalysisError::ValidationError(format!(
+            "batch schema requires at least 3 columns, got {}",
+            fields.len()
+        )));
+    }
+
+    let col0 = &fields[0];
+    if col0.name() != "sku_id" {
+        return Err(AnalysisError::ValidationError(format!(
+            "col[0] must be named 'sku_id', got '{}'",
+            col0.name()
+        )));
+    }
+    if !matches!(col0.data_type(), DataType::Utf8) {
+        return Err(AnalysisError::ValidationError(format!(
+            "sku_id must be Utf8, got {:?}",
+            col0.data_type()
+        )));
+    }
+
+    let col1 = &fields[1];
+    if col1.name() != "time_index" {
+        return Err(AnalysisError::ValidationError(format!(
+            "col[1] must be named 'time_index', got '{}'",
+            col1.name()
+        )));
+    }
+    if !matches!(col1.data_type(), DataType::Float64) {
+        return Err(AnalysisError::ValidationError(format!(
+            "time_index must be Float64, got {:?}",
+            col1.data_type()
+        )));
+    }
+
+    let col2 = &fields[2];
+    if col2.name() != "demand" {
+        return Err(AnalysisError::ValidationError(format!(
+            "col[2] must be named 'demand', got '{}'",
+            col2.name()
+        )));
+    }
+    if !matches!(col2.data_type(), DataType::Float64) {
+        return Err(AnalysisError::ValidationError(format!(
+            "demand must be Float64, got {:?}",
+            col2.data_type()
+        )));
+    }
+
+    Ok(())
+}
+
 /// Validate Arrow schema has required fields
 fn validate_schema(schema: Arc<Schema>) -> Result<(), AnalysisError> {
     if schema.fields().is_empty() {
@@ -226,5 +339,120 @@ mod tests {
         let result = parse_arrow_ipc(&[]);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("empty input"));
+    }
+}
+
+#[cfg(test)]
+mod batch_parser_tests {
+    use super::*;
+    use arrow::array::{Float64Array, StringArray};
+    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::ipc::writer::StreamWriter;
+    use arrow::record_batch::RecordBatch;
+    use std::sync::Arc;
+
+    fn make_batch_ipc(sku_ids: Vec<&str>, time_indices: Vec<f64>, demands: Vec<f64>) -> Vec<u8> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("sku_id", DataType::Utf8, false),
+            Field::new("time_index", DataType::Float64, false),
+            Field::new("demand", DataType::Float64, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(StringArray::from(sku_ids)) as _,
+                Arc::new(Float64Array::from(time_indices)) as _,
+                Arc::new(Float64Array::from(demands)) as _,
+            ],
+        )
+        .unwrap();
+        let mut buf = Vec::new();
+        let mut writer = StreamWriter::try_new(&mut buf, &schema).unwrap();
+        writer.write(&batch).unwrap();
+        writer.finish().unwrap();
+        buf
+    }
+
+    #[test]
+    fn test_parse_batch_arrow_ipc_valid() {
+        let ipc = make_batch_ipc(
+            vec!["SKU-A", "SKU-A", "SKU-B"],
+            vec![0.0, 1.0, 0.0],
+            vec![100.0, 110.0, 50.0],
+        );
+        let parsed = parse_batch_arrow_ipc(&ipc).unwrap();
+        assert_eq!(parsed.order_ids.len(), 3);
+        assert_eq!(parsed.order_ids[0], "SKU-A");
+        assert_eq!(parsed.order_ids[2], "SKU-B");
+        assert_eq!(parsed.features.shape(), &[3, 2]);
+        assert!((parsed.features[[0, 1]] - 100.0).abs() < 1e-9); // demand for row 0
+    }
+
+    #[test]
+    fn test_parse_batch_arrow_ipc_empty_returns_error() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("sku_id", DataType::Utf8, false),
+            Field::new("time_index", DataType::Float64, false),
+            Field::new("demand", DataType::Float64, false),
+        ]));
+        let mut buf = Vec::new();
+        let mut writer = StreamWriter::try_new(&mut buf, &schema).unwrap();
+        writer.finish().unwrap();
+        let result = parse_batch_arrow_ipc(&buf);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("empty"));
+    }
+
+    #[test]
+    fn test_validate_batch_schema_wrong_col_name() {
+        let ipc = {
+            let schema = Arc::new(Schema::new(vec![
+                Field::new("order_id", DataType::Utf8, false),
+                Field::new("time_index", DataType::Float64, false),
+                Field::new("demand", DataType::Float64, false),
+            ]));
+            let batch = RecordBatch::try_new(
+                schema.clone(),
+                vec![
+                    Arc::new(StringArray::from(vec!["A"])) as _,
+                    Arc::new(Float64Array::from(vec![0.0])) as _,
+                    Arc::new(Float64Array::from(vec![1.0])) as _,
+                ],
+            )
+            .unwrap();
+            let mut buf = Vec::new();
+            let mut writer = StreamWriter::try_new(&mut buf, &schema).unwrap();
+            writer.write(&batch).unwrap();
+            writer.finish().unwrap();
+            buf
+        };
+        let result = parse_batch_arrow_ipc(&ipc);
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("sku_id"),
+            "Expected 'sku_id' in error: {}",
+            err_msg
+        );
+    }
+
+    #[test]
+    fn test_validate_batch_schema_too_few_columns() {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "sku_id",
+            DataType::Utf8,
+            false,
+        )]));
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(StringArray::from(vec!["A"])) as _],
+        )
+        .unwrap();
+        let mut buf = Vec::new();
+        let mut writer = StreamWriter::try_new(&mut buf, &schema).unwrap();
+        writer.write(&batch).unwrap();
+        writer.finish().unwrap();
+        let result = parse_batch_arrow_ipc(&buf);
+        assert!(result.is_err());
     }
 }

@@ -15,10 +15,15 @@ pub mod insight_core;
 pub mod utils;
 
 use arrow_handler::{
-    build_anomaly_result, build_cluster_result, build_regression_result, parse_arrow_ipc,
+    SkuPredictionResult, build_anomaly_result, build_batch_regression_result, build_cluster_result,
+    build_regression_result, parse_arrow_ipc, parse_batch_arrow_ipc,
 };
-use insight_core::{run_isolation_forest, run_kmeans, run_linear_regression, run_regression_with_mode, PredictionMode};
-use utils::{ScalingMethod, min_max_scale, standard_scale};
+use insight_core::{
+    PredictionMode, run_isolation_forest, run_kmeans, run_linear_regression,
+    run_regression_with_mode,
+};
+use ndarray::{Array1, Array2};
+use utils::{AnalysisError, ScalingMethod, min_max_scale, standard_scale};
 
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
@@ -540,6 +545,140 @@ pub async fn convert_excel_to_parquet(
         }
 
         Ok(result)
+    }
+}
+
+/// Predicts inventory demand for multiple SKUs in a single batch call.
+///
+/// Accepts an Arrow IPC stream with schema `(sku_id: Utf8, time_index: Float64, demand: Float64)`.
+/// Each unique `sku_id` is treated as an independent time series; rows need not be contiguous
+/// but will be processed in first-seen order.
+///
+/// # Parameters
+/// - `data`: Arrow IPC stream bytes (`Uint8Array` from TypeScript)
+/// - `predict_steps`: number of future steps to forecast per SKU (must be ≥ 1)
+/// - `mode`: prediction mode string — `"linear"`, `"polynomial_2"`, `"polynomial_3"`,
+///   `"seasonal_7"`, `"ensemble"`
+/// - `scaling`: scaling method string — `"none"`, `"min_max"`, `"standard"`
+/// - `_threshold`: unused (pass `0.0`); reserved for API consistency
+///
+/// # Returns
+/// Arrow IPC stream bytes with schema:
+/// `(sku_id: Utf8, step_index: Int32?, prediction: Float64?, error_code: Utf8?, error_message: Utf8?)`
+///
+/// Success rows have `step_index` 0…N-1 and `prediction` set; error columns are null.
+/// Error rows have `error_code`/`error_message` set; numeric columns are null.
+///
+/// # Errors
+/// Returns `JsError` only for top-level failures (bad IPC, empty input, invalid params).
+/// Per-SKU failures appear as error rows in the output — they do NOT abort the call.
+#[wasm_bindgen]
+pub async fn predict_inventory_demand_batch(
+    data: Vec<u8>,
+    predict_steps: usize,
+    mode: String,
+    scaling: String,
+    _threshold: f64,
+) -> Result<Vec<u8>, JsError> {
+    if predict_steps == 0 {
+        return Err(JsError::new("predict_steps must be >= 1"));
+    }
+
+    let parsed = parse_batch_arrow_ipc(&data).map_err(|e| JsError::new(&e.to_string()))?;
+
+    let prediction_mode = match mode.as_str() {
+        "linear" => PredictionMode::from_params(0, 0),
+        "polynomial_2" => PredictionMode::from_params(1, 0),
+        "polynomial_3" => PredictionMode::Polynomial { degree: 3 },
+        "seasonal_7" => PredictionMode::from_params(2, 7),
+        "ensemble" => PredictionMode::from_params(3, 7),
+        other => return Err(JsError::new(&format!("unknown prediction mode: {other}"))),
+    };
+
+    let scaling_method = match scaling.as_str() {
+        "none" => ScalingMethod::None,
+        "min_max" => ScalingMethod::MinMax,
+        "standard" => ScalingMethod::Standard,
+        other => return Err(JsError::new(&format!("unknown scaling method: {other}"))),
+    };
+
+    // Group demands by SKU, preserving first-seen insertion order
+    let mut sku_map: std::collections::HashMap<String, Vec<f64>> = std::collections::HashMap::new();
+    let mut sku_order: Vec<String> = Vec::new();
+    for (i, sku_id) in parsed.order_ids.iter().enumerate() {
+        if !sku_map.contains_key(sku_id) {
+            sku_order.push(sku_id.clone());
+        }
+        sku_map
+            .entry(sku_id.clone())
+            .or_default()
+            .push(parsed.features[[i, 1]]);
+    }
+
+    // Process each SKU independently
+    let mut results: Vec<SkuPredictionResult> = Vec::with_capacity(sku_order.len());
+    for sku_id in &sku_order {
+        let demands = sku_map.remove(sku_id).unwrap_or_default();
+        let result = (|| -> Result<Vec<f64>, AnalysisError> {
+            let scaled = scale_demand_slice(demands, &scaling_method)?;
+            let y = Array1::from(scaled);
+            run_regression_with_mode(y, predict_steps, prediction_mode)
+        })();
+        match result {
+            Ok(predictions) => results.push(SkuPredictionResult::Success {
+                sku_id: sku_id.clone(),
+                predictions,
+            }),
+            Err(e) => {
+                let (error_code, error_message) = split_analysis_error(&e);
+                results.push(SkuPredictionResult::Failure {
+                    sku_id: sku_id.clone(),
+                    error_code,
+                    error_message,
+                });
+            }
+        }
+    }
+
+    build_batch_regression_result(results).map_err(|e| JsError::new(&e.to_string()))
+}
+
+/// Scales a 1-D demand slice using the specified method.
+///
+/// Wraps the slice in a single-column Array2, applies the project's existing
+/// min_max_scale / standard_scale logic, then extracts column 0 back out.
+///
+/// # Parameters
+/// - `demands`: raw demand values for one SKU
+/// - `method`: scaling method to apply
+///
+/// # Returns
+/// Scaled values as `Vec<f64>`, or an `AnalysisError` on failure.
+fn scale_demand_slice(
+    demands: Vec<f64>,
+    method: &ScalingMethod,
+) -> Result<Vec<f64>, AnalysisError> {
+    let n = demands.len();
+    let arr = Array2::from_shape_vec((n, 1), demands)
+        .map_err(|e| AnalysisError::ValidationError(format!("scale reshape failed: {e}")))?;
+    let scaled = match method {
+        ScalingMethod::MinMax => min_max_scale(arr)?,
+        ScalingMethod::Standard => standard_scale(arr)?,
+        ScalingMethod::None => arr,
+    };
+    Ok(scaled.column(0).to_vec())
+}
+
+/// Splits an `AnalysisError` display string into `(error_code, error_message)`.
+///
+/// Format expected: `"ErrorKind: human-readable message"`.
+/// Falls back to `("ModelError", full_string)` if no `": "` separator is found.
+fn split_analysis_error(e: &AnalysisError) -> (String, String) {
+    let s = e.to_string();
+    if let Some(pos) = s.find(": ") {
+        (s[..pos].to_string(), s[pos + 2..].to_string())
+    } else {
+        ("ModelError".to_string(), s)
     }
 }
 

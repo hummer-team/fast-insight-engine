@@ -396,6 +396,61 @@ pub fn run_linear_regression(
     Ok(predictions.to_vec())
 }
 
+/// Run regression prediction using configurable feature engineering modes.
+///
+/// Unlike `run_linear_regression`, this function generates a time index
+/// `t = [0, 1, ..., n-1]` internally, making it suitable for sequential
+/// time-series data. The caller only provides the target demand values `y`.
+///
+/// # Arguments
+/// * `y`             - Target demand values, one per time step
+/// * `predict_steps` - Number of future steps to forecast (must be > 0)
+/// * `mode`          - Feature engineering strategy; see `PredictionMode`
+///
+/// # Returns
+/// * `Ok(predictions)` - Predicted demand for the next `predict_steps` periods
+/// * `Err(AnalysisError)` - If validation fails or model training fails
+///
+/// # Minimum data requirement
+/// At least 2 samples are required. For Seasonal/Ensemble modes, providing
+/// at least 2× the season period is recommended for reliable estimates.
+pub fn run_regression_with_mode(
+    y: Array1<f64>,
+    predict_steps: usize,
+    mode: PredictionMode,
+) -> Result<Vec<f64>, AnalysisError> {
+    let n = y.len();
+
+    if n < 2 {
+        return Err(AnalysisError::ValidationError(
+            "prediction requires at least 2 data points".to_string(),
+        ));
+    }
+
+    if predict_steps == 0 {
+        return Err(AnalysisError::ValidationError(
+            "predict_steps must be > 0".to_string(),
+        ));
+    }
+
+    // Build time index for training: [0.0, 1.0, ..., n-1.0]
+    let t_train: Vec<f64> = (0..n).map(|i| i as f64).collect();
+    let x_train = build_feature_matrix(&t_train, &mode)?;
+
+    // Train model (linfa_linear adds intercept by default)
+    let dataset = Dataset::new(x_train, y);
+    let model = LinearRegression::default()
+        .fit(&dataset)
+        .map_err(|e| AnalysisError::ModelError(format!("regression fitting failed: {}", e)))?;
+
+    // Build future time index: [n.0, n+1.0, ..., n+predict_steps-1.0]
+    let t_future: Vec<f64> = (0..predict_steps).map(|i| (n + i) as f64).collect();
+    let x_future = build_feature_matrix(&t_future, &mode)?;
+
+    let predictions: Array1<f64> = model.predict(&x_future);
+    Ok(predictions.to_vec())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -589,5 +644,105 @@ mod tests {
 
         let result2 = build_feature_matrix(&t, &PredictionMode::Ensemble { degree: 2, period: 0 });
         assert!(result2.is_err());
+    }
+
+    // ─── PredictionMode::from_params tests ────────────────────────────────────
+
+    #[test]
+    fn test_prediction_mode_from_params() {
+        assert_eq!(PredictionMode::from_params(0, 7), PredictionMode::Linear);
+        assert_eq!(PredictionMode::from_params(1, 0), PredictionMode::Polynomial { degree: 2 });
+        assert_eq!(PredictionMode::from_params(2, 7), PredictionMode::Seasonal { period: 7 });
+        // mode=2 with season_period=0 → auto-defaults to period=7
+        assert_eq!(PredictionMode::from_params(2, 0), PredictionMode::Seasonal { period: 7 });
+        assert_eq!(PredictionMode::from_params(3, 30), PredictionMode::Ensemble { degree: 2, period: 30 });
+        // Unknown mode → Linear fallback
+        assert_eq!(PredictionMode::from_params(99, 7), PredictionMode::Linear);
+    }
+
+    // ─── run_regression_with_mode tests ───────────────────────────────────────
+
+    #[test]
+    fn test_run_regression_linear_mode_accuracy() {
+        // y = 2t  →  train on t=0..3, predict t=4,5,6 → expect ~8,10,12
+        let y = arr1(&[0.0, 2.0, 4.0, 6.0]);
+        let preds = run_regression_with_mode(y, 3, PredictionMode::Linear).unwrap();
+        assert_eq!(preds.len(), 3);
+        assert!((preds[0] - 8.0).abs() < 0.5, "expected ~8, got {}", preds[0]);
+        assert!((preds[1] - 10.0).abs() < 0.5, "expected ~10, got {}", preds[1]);
+        assert!((preds[2] - 12.0).abs() < 0.5, "expected ~12, got {}", preds[2]);
+    }
+
+    #[test]
+    fn test_run_regression_polynomial_mode_accuracy() {
+        // y = t²  →  train on t=0..4, predict t=5,6 → expect ~25, 36
+        let y = arr1(&[0.0, 1.0, 4.0, 9.0, 16.0]);
+        let preds = run_regression_with_mode(y, 2, PredictionMode::Polynomial { degree: 2 }).unwrap();
+        assert_eq!(preds.len(), 2);
+        assert!((preds[0] - 25.0).abs() < 1.0, "expected ~25, got {}", preds[0]);
+        assert!((preds[1] - 36.0).abs() < 1.0, "expected ~36, got {}", preds[1]);
+    }
+
+    #[test]
+    fn test_run_regression_seasonal_mode_shape_and_convergence() {
+        // y = sin(2πt/4), 8 samples, period=4
+        // Predict 4 steps → expect shape=[4] and values within [-2.0, 2.0]
+        let tau = 2.0 * std::f64::consts::PI;
+        let y: Array1<f64> = (0..8).map(|i| (tau * i as f64 / 4.0).sin()).collect();
+        let preds = run_regression_with_mode(y, 4, PredictionMode::Seasonal { period: 4 }).unwrap();
+        assert_eq!(preds.len(), 4);
+        for p in &preds {
+            assert!(p.abs() < 2.0, "seasonal prediction out of range: {}", p);
+        }
+    }
+
+    #[test]
+    fn test_run_regression_ensemble_mode_shape() {
+        // y = t + sin(2πt/4), 8 samples, predict 2 steps
+        let tau = 2.0 * std::f64::consts::PI;
+        let y: Array1<f64> = (0..8)
+            .map(|i| i as f64 + (tau * i as f64 / 4.0).sin())
+            .collect();
+        let preds = run_regression_with_mode(
+            y,
+            2,
+            PredictionMode::Ensemble { degree: 2, period: 4 },
+        )
+        .unwrap();
+        assert_eq!(preds.len(), 2);
+        // t=8: 8 + sin(4π) ≈ 8.0; t=9: 9 + sin(4.5π) ≈ 10.0
+        assert!((preds[0] - 8.0).abs() < 1.5, "expected ~8, got {}", preds[0]);
+        assert!((preds[1] - 10.0).abs() < 1.5, "expected ~10, got {}", preds[1]);
+    }
+
+    #[test]
+    fn test_run_regression_with_mode_empty_error() {
+        let y = arr1(&[] as &[f64]);
+        assert!(run_regression_with_mode(y, 3, PredictionMode::Linear).is_err());
+    }
+
+    #[test]
+    fn test_run_regression_with_mode_single_sample_error() {
+        let y = arr1(&[5.0]);
+        assert!(run_regression_with_mode(y, 1, PredictionMode::Linear).is_err());
+    }
+
+    #[test]
+    fn test_run_regression_with_mode_zero_steps_error() {
+        let y = arr1(&[1.0, 2.0, 3.0]);
+        assert!(run_regression_with_mode(y, 0, PredictionMode::Linear).is_err());
+    }
+
+    #[test]
+    fn test_run_regression_with_mode_season_period_zero_defaults_to_weekly() {
+        // from_params(2, 0) → Seasonal { period: 7 }, should not error on 14+ samples
+        let y: Array1<f64> = (0..14).map(|i| i as f64).collect();
+        let preds = run_regression_with_mode(
+            y,
+            1,
+            PredictionMode::from_params(2, 0), // auto period → 7
+        )
+        .unwrap();
+        assert_eq!(preds.len(), 1);
     }
 }

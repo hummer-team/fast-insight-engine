@@ -177,6 +177,126 @@ forecastDemand().catch(console.error);
 > - 对于大数据集（>10k 行）建议在 Web Worker 中调用以避免阻塞主线程
 > - `prediction_mode=0` 与旧版线性回归行为完全兼容
 
+### 5b. 批量多SKU库存预测 (Batch Multi-SKU Prediction)
+
+预测多个SKU的库存需求，单次调用处理所有SKU，每个SKU独立运算。失败的SKU以错误行返回，不会中断整个批次。
+
+#### 函数签名
+
+```typescript
+predict_inventory_demand_batch(
+  data: Uint8Array,        // Arrow IPC Stream 格式输入
+  predict_steps: number,   // 每个SKU预测步数 (≥ 1)
+  mode: string,            // 预测模式: "linear" | "polynomial_2" | "polynomial_3" | "exponential"
+  scaling: string,         // 缩放方式: "none" | "min_max" | "standard"
+  threshold: number        // 保留参数，传 0.0
+): Promise<Uint8Array>     // Arrow IPC Stream 格式输出
+```
+
+#### 输入 Arrow Schema
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `sku_id` | `Utf8` | SKU 标识符（相同 sku_id 的行属于同一时间序列） |
+| `time_index` | `Float64` | 时间索引（库内保留，可传 0,1,2,…） |
+| `demand` | `Float64` | 历史需求量（训练数据） |
+
+- 同一 SKU 的行无需连续，但会按首次出现顺序处理
+- 每个 SKU 至少需要 **2 行**数据，否则返回 ValidationError 行
+
+#### 输出 Arrow Schema
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `sku_id` | `Utf8` | SKU 标识符 |
+| `step_index` | `Int32?` | 预测步序号 0,1,2,…（成功行有值；错误行为 null） |
+| `prediction` | `Float64?` | 预测值（成功行有值；错误行为 null） |
+| `error_code` | `Utf8?` | 错误类型：`"ValidationError"` 或 `"ModelError"`（错误行有值；成功行为 null） |
+| `error_message` | `Utf8?` | 错误描述（错误行有值；成功行为 null） |
+
+#### 完整调用示例
+
+```typescript
+import * as arrow from "apache-arrow";
+import init, { predict_inventory_demand_batch } from "./pkg/fast_insight_engine.js";
+
+await init();
+
+// 构建输入：3 个 SKU，每个 3 个历史数据点
+const skuIds    = ["SKU-A", "SKU-A", "SKU-A", "SKU-B", "SKU-B", "SKU-B", "SKU-C"];
+const timeIdx   = [0, 1, 2, 0, 1, 2, 0];
+const demands   = [100, 110, 120, 50, 55, 60, 30]; // SKU-C 只有 1 行 → 将产生错误行
+
+const inputTable = new arrow.Table({
+  sku_id:     arrow.vectorFromArray(skuIds,  new arrow.Utf8()),
+  time_index: arrow.vectorFromArray(timeIdx, new arrow.Float64()),
+  demand:     arrow.vectorFromArray(demands, new arrow.Float64()),
+});
+
+const writer = new arrow.RecordBatchStreamWriter();
+writer.writeAll(inputTable);
+const inputBytes = writer.toUint8Array();
+
+// 调用：预测 2 步，线性模式，不缩放
+const resultBytes = await predict_inventory_demand_batch(
+  inputBytes,
+  2,          // predict_steps
+  "linear",   // mode
+  "none",     // scaling
+  0.0         // threshold (保留参数)
+);
+
+// 解析输出
+const resultTable = arrow.tableFromIPC(resultBytes);
+
+// 筛选成功行（有预测值）
+const successRows = resultTable
+  .filter(row => row.error_code === null)
+  .select(["sku_id", "step_index", "prediction"]);
+
+// 筛选错误行（预测失败的 SKU）
+const errorRows = resultTable
+  .filter(row => row.error_code !== null)
+  .select(["sku_id", "error_code", "error_message"]);
+
+console.log("预测结果：", successRows.toArray());
+// 输出示例：
+// [
+//   { sku_id: "SKU-A", step_index: 0, prediction: 130.0 },
+//   { sku_id: "SKU-A", step_index: 1, prediction: 140.0 },
+//   { sku_id: "SKU-B", step_index: 0, prediction: 65.0  },
+//   { sku_id: "SKU-B", step_index: 1, prediction: 70.0  },
+// ]
+
+console.log("错误 SKU：", errorRows.toArray());
+// 输出示例：
+// [
+//   { sku_id: "SKU-C", error_code: "ValidationError", error_message: "..." }
+// ]
+```
+
+#### DuckDB-Wasm 查询示例
+
+```sql
+-- 只看成功预测的 SKU
+SELECT sku_id, step_index, prediction
+FROM batch_result
+WHERE error_code IS NULL
+ORDER BY sku_id, step_index;
+
+-- 只看失败的 SKU
+SELECT sku_id, error_code, error_message
+FROM batch_result
+WHERE error_code IS NOT NULL;
+```
+
+#### 注意事项
+
+- `predict_steps` 必须 ≥ 1，否则函数会抛出 `JsError`
+- SKU 数量没有限制，但大批量时建议测试浏览器内存
+- 每个 SKU 使用相同的 `mode` 和 `scaling` 参数；如需不同参数，需分批调用
+- `threshold` 参数当前未使用，保留 `0.0` 即可
+
 ### 6. 获取版本信息
 
 ```typescript

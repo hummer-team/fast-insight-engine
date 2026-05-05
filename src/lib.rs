@@ -17,7 +17,7 @@ pub mod utils;
 use arrow_handler::{
     build_anomaly_result, build_cluster_result, build_regression_result, parse_arrow_ipc,
 };
-use insight_core::{run_isolation_forest, run_kmeans, run_linear_regression};
+use insight_core::{run_isolation_forest, run_kmeans, run_linear_regression, run_regression_with_mode, PredictionMode};
 use utils::{ScalingMethod, min_max_scale, standard_scale};
 
 #[cfg(target_arch = "wasm32")]
@@ -280,61 +280,58 @@ pub async fn segment_customer_orders(
     Ok(result)
 }
 
-/// Predict future inventory demand using Linear Regression
+/// Predict future inventory demand using configurable regression modes
+///
+/// Supports four prediction strategies to handle linear and non-linear demand patterns:
+/// - Mode 0 (Linear):     `ŷ = a + b·t` — suitable for steady growth/decline
+/// - Mode 1 (Polynomial): `ŷ = a + b·t + c·t²` — S-curves or saturation
+/// - Mode 2 (Seasonal):   `ŷ = a + b·t + c·sin(2πt/P) + d·cos(2πt/P)` — cyclic demand
+/// - Mode 3 (Ensemble):   combines polynomial + seasonal (recommended for production)
 ///
 /// # Arguments
-/// * `data` - Arrow IPC Stream format bytes with x (time/index) and y (demand) columns
-/// * `predict_steps` - Number of future time steps to predict
-/// * `scaling_mode` - Scaling method: 0=None (pre-scaled by DuckDB), 1=MinMax, 2=Standard
+/// * `data`            - Arrow IPC Stream bytes; must have ≥2 feature columns
+///                       (col 0 = time/index placeholder, col 1 = demand values)
+/// * `predict_steps`   - Number of future time steps to forecast (must be > 0)
+/// * `scaling_mode`    - 0=None (pre-scaled), 1=MinMax, 2=Standard
+/// * `prediction_mode` - 0=Linear, 1=Polynomial, 2=Seasonal, 3=Ensemble; unknown→Linear
+/// * `season_period`   - Cycle length for Seasonal/Ensemble modes (0=auto→7, 7=weekly, 30=monthly)
 ///
 /// # Returns
-/// * `Ok(Uint8Array)` - Arrow IPC result with predictions
-/// * `Err(JsError)` - Error message
+/// * `Ok(Uint8Array)` - Arrow IPC result with forecasted demand values
+/// * `Err(JsError)`   - Validation or model error message
 ///
 /// # Performance Note
-/// **This function is marked `async` to return a Promise to JavaScript, but the actual
-/// computation is synchronous and CPU-intensive.** Linear regression training performs
-/// matrix operations that execute atomically. For large datasets, consider calling this
-/// function from a Web Worker to avoid blocking the browser's main thread.
-///
-/// # Scaling
-/// The `scaling_mode` parameter allows flexible data preprocessing:
-/// - `0` (None): Assumes data is already scaled (e.g., by DuckDB Wasm)
-/// - `1` (MinMax): Applies MinMax scaling in Rust
-/// - `2` (Standard): Applies Standard scaling in Rust
+/// Computation is synchronous and CPU-intensive. For large datasets (>10k rows),
+/// call from a Web Worker to avoid blocking the browser main thread.
 #[wasm_bindgen]
 pub async fn predict_inventory_demand(
     data: &[u8],
     predict_steps: usize,
     scaling_mode: u8,
+    prediction_mode: u8,
+    season_period: u32,
 ) -> Result<Vec<u8>, JsError> {
-    // Parse Arrow IPC input
     let parsed = parse_arrow_ipc(data)?;
 
-    // Apply scaling based on mode (for features)
     let features = match ScalingMethod::from(scaling_mode) {
         ScalingMethod::None => parsed.features,
         ScalingMethod::MinMax => min_max_scale(parsed.features)?,
         ScalingMethod::Standard => standard_scale(parsed.features)?,
     };
 
-    // Extract X (first feature column) and Y (second feature column)
-    // Expected schema: order_id (String), x (Float64), y (Float64)
     if features.ncols() < 2 {
         return Err(JsError::new(
-            "Linear regression requires at least 2 feature columns (x and y)",
+            "prediction requires at least 2 feature columns (time index and demand values)",
         ));
     }
 
-    let x = features.column(0).to_owned().insert_axis(ndarray::Axis(1));
+    // Column 1 holds demand values; time index is generated internally
     let y = features.column(1).to_owned();
 
-    // Run Linear Regression
-    let predictions = run_linear_regression(x, y, predict_steps)?;
+    let mode = PredictionMode::from_params(prediction_mode, season_period);
+    let predictions = run_regression_with_mode(y, predict_steps, mode)?;
 
-    // Build Arrow IPC result
     let result = build_regression_result(predictions)?;
-
     Ok(result)
 }
 
@@ -357,9 +354,9 @@ pub async fn predict_inventory_demand(
 /// * `Err(Error)` - Conversion error with detailed message
 ///
 /// # Note
-/// **In Wasm builds**: Returns error (CSV library incompatible). 
+/// **In Wasm builds**: Returns error (CSV library incompatible).
 /// Use DuckDB Wasm CSV reader instead.
-/// 
+///
 /// **In non-Wasm builds** (Node.js): Generates valid Parquet with complete footer.
 #[wasm_bindgen]
 pub async fn convert_csv_to_parquet(
@@ -371,7 +368,13 @@ pub async fn convert_csv_to_parquet(
 ) -> Result<Vec<u8>, JsError> {
     #[cfg(target_arch = "wasm32")]
     {
-        let _ = (csv_data, delimiter, has_header, row_group_size, schema_hint_json);
+        let _ = (
+            csv_data,
+            delimiter,
+            has_header,
+            row_group_size,
+            schema_hint_json,
+        );
         Err(JsError::new(
             "CSV to Parquet unavailable in Wasm (csv library uses C code). \
              Alternatives: Use DuckDB Wasm CSV reader, or papaparse + Arrow IPC builder.",
@@ -406,11 +409,13 @@ pub async fn convert_csv_to_parquet(
         // Begin conversion with optional schema hint
         // None = lenient mode: all columns Utf8, DuckDB handles type inference
         // Some(hint) = strict mode: convert columns to specified types, fail on mismatch
-        converter.begin_csv_to_parquet(csv_opts, pq_opts, schema_hint.as_ref())
+        converter
+            .begin_csv_to_parquet(csv_opts, pq_opts, schema_hint.as_ref())
             .map_err(|e| JsError::new(&format!("CSV→Parquet error: {}", e)))?;
 
         // Process all CSV data in one chunk
-        let chunks = converter.feed_csv_chunk(csv_data, true)
+        let chunks = converter
+            .feed_csv_chunk(csv_data, true)
             .map_err(|e| JsError::new(&format!("CSV chunk error: {}", e)))?;
 
         // Merge all Parquet chunks: each is a complete Parquet file
@@ -450,7 +455,7 @@ pub async fn convert_csv_to_parquet(
 /// # Note
 /// **In Wasm builds**: Returns error (calamine library uses C code).
 /// Use JavaScript Excel libraries (xlsx/exceljs) instead.
-/// 
+///
 /// **In non-Wasm builds** (Node.js): Generates valid Parquet with complete footer.
 #[wasm_bindgen]
 pub async fn convert_excel_to_parquet(
@@ -463,7 +468,14 @@ pub async fn convert_excel_to_parquet(
 ) -> Result<Vec<u8>, JsError> {
     #[cfg(target_arch = "wasm32")]
     {
-        let _ = (excel_data, sheet_name_or_index, has_header, row_group_size, max_string_table_bytes, schema_hint_json);
+        let _ = (
+            excel_data,
+            sheet_name_or_index,
+            has_header,
+            row_group_size,
+            max_string_table_bytes,
+            schema_hint_json,
+        );
         Err(JsError::new(
             "Excel to Parquet unavailable in Wasm (calamine library uses C code). \
              Alternatives: Use JavaScript libraries (xlsx, exceljs) to read Excel, then Arrow IPC builder.",
@@ -472,7 +484,9 @@ pub async fn convert_excel_to_parquet(
 
     #[cfg(not(target_arch = "wasm32"))]
     {
-        use crate::file_convert::{Converter, ExcelLoadOptions, ParquetWriteOptions, SchemaHint, SheetSelector};
+        use crate::file_convert::{
+            Converter, ExcelLoadOptions, ParquetWriteOptions, SchemaHint, SheetSelector,
+        };
 
         // Parse optional schema hint: empty/None = lenient mode, JSON = strict mode
         let schema_hint: Option<SchemaHint> = match schema_hint_json.as_deref() {
@@ -487,13 +501,13 @@ pub async fn convert_excel_to_parquet(
         let mut converter = Converter::new();
         let excel_opts = ExcelLoadOptions {
             sheet: if sheet_name_or_index.is_empty() {
-                None  // Use first sheet
+                None // Use first sheet
             } else {
                 Some(SheetSelector::ByName(sheet_name_or_index))
             },
             // Use provided limit or default to 100 MB if 0 is passed
             max_string_table_bytes: Some(if max_string_table_bytes == 0 {
-                100_000_000  // 100 MB default
+                100_000_000 // 100 MB default
             } else {
                 max_string_table_bytes
             }),
@@ -505,11 +519,13 @@ pub async fn convert_excel_to_parquet(
         };
 
         // Begin conversion with optional schema hint
-        converter.begin_excel_to_parquet(excel_opts, pq_opts, schema_hint.as_ref())
+        converter
+            .begin_excel_to_parquet(excel_opts, pq_opts, schema_hint.as_ref())
             .map_err(|e| JsError::new(&format!("Excel→Parquet error: {}", e)))?;
 
         // Process all Excel data in one chunk
-        let chunks = converter.feed_excel_chunk(excel_data, true)
+        let chunks = converter
+            .feed_excel_chunk(excel_data, true)
             .map_err(|e| JsError::new(&format!("Excel chunk error: {}", e)))?;
 
         // Merge all Parquet chunks: each is a complete Parquet file
@@ -526,7 +542,6 @@ pub async fn convert_excel_to_parquet(
         Ok(result)
     }
 }
-
 
 /// Get Wasm module version for compatibility checking
 ///

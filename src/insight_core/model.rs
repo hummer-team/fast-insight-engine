@@ -412,8 +412,9 @@ pub fn run_linear_regression(
 /// * `Err(AnalysisError)` - If validation fails or model training fails
 ///
 /// # Minimum data requirement
-/// At least 2 samples are required. For Seasonal/Ensemble modes, providing
-/// at least 2× the season period is recommended for reliable estimates.
+/// At least 2 samples are required for `Linear` mode. For `Polynomial` mode,
+/// use n ≥ 3; for `Seasonal`/`Ensemble` modes, use n ≥ 2× the season period
+/// for reliable parameter estimation.
 pub fn run_regression_with_mode(
     y: Array1<f64>,
     predict_steps: usize,

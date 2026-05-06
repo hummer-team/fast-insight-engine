@@ -29,8 +29,12 @@ pub fn parse_arrow_ipc(data: &[u8]) -> Result<ParsedData, AnalysisError> {
 
     // Create cursor and StreamReader
     let cursor = Cursor::new(data);
-    let reader = StreamReader::try_new(cursor, None)
-        .map_err(|e| AnalysisError::ArrowError(format!("failed to create StreamReader: {}", e)))?;
+    let reader = StreamReader::try_new(cursor, None).map_err(|e| {
+        AnalysisError::ArrowError(format!(
+            "failed to create StreamReader: {}; ensure input is Arrow IPC Stream format (use tableToIPC(table, 'stream'))",
+            e
+        ))
+    })?;
 
     // Read all batches
     let mut all_order_ids: Vec<String> = Vec::new();
@@ -110,9 +114,18 @@ pub fn parse_arrow_ipc(data: &[u8]) -> Result<ParsedData, AnalysisError> {
 /// * `Err(AnalysisError::ValidationError)` if schema is invalid or input is empty
 /// * `Err(AnalysisError::ArrowError)` if IPC parsing fails
 pub fn parse_batch_arrow_ipc(data: &[u8]) -> Result<ParsedData, AnalysisError> {
+    if data.is_empty() {
+        return Err(AnalysisError::ArrowError(
+            "input data is empty; ensure tableToIPC(table, 'stream') was called before passing to Wasm".to_string(),
+        ));
+    }
     let cursor = Cursor::new(data);
-    let reader = StreamReader::try_new(cursor, None)
-        .map_err(|e| AnalysisError::ArrowError(format!("failed to create StreamReader: {}", e)))?;
+    let reader = StreamReader::try_new(cursor, None).map_err(|e| {
+        AnalysisError::ArrowError(format!(
+            "failed to create StreamReader: {}; ensure input is Arrow IPC Stream format (use tableToIPC(table, 'stream'))",
+            e
+        ))
+    })?;
 
     validate_batch_schema(reader.schema())?;
 

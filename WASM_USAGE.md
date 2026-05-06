@@ -233,9 +233,7 @@ const inputTable = new arrow.Table({
   demand:     arrow.vectorFromArray(demands, new arrow.Float64()),
 });
 
-const writer = new arrow.RecordBatchStreamWriter();
-writer.writeAll(inputTable);
-const inputBytes = writer.toUint8Array();
+const inputBytes = arrow.tableToIPC(inputTable, 'stream'); // Uint8Array，必须使用 'stream' 格式
 
 // 调用：预测 2 步，线性模式，不缩放
 const resultBytes = await predict_inventory_demand_batch(

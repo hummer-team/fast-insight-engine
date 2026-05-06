@@ -3,7 +3,9 @@
 
 #[cfg(not(target_arch = "wasm32"))]
 mod parquet_footer_tests {
-    use fast_insight_engine::file_convert::{Converter, CsvReadOptions, ParquetWriteOptions, NullHandling, ParquetCompression};
+    use fast_insight_engine::file_convert::{
+        Converter, CsvReadOptions, NullHandling, ParquetCompression, ParquetWriteOptions,
+    };
 
     const PARQUET_MAGIC: &[u8; 4] = b"PAR1";
 
@@ -23,22 +25,37 @@ mod parquet_footer_tests {
             compression: ParquetCompression::Uncompressed,
         };
 
-        converter.begin_csv_to_parquet(csv_opts, pq_opts, None).expect("begin failed");
-        let chunks = converter.feed_csv_chunk(csv_data, true).expect("feed failed");
+        converter
+            .begin_csv_to_parquet(csv_opts, pq_opts, None)
+            .expect("begin failed");
+        let chunks = converter
+            .feed_csv_chunk(csv_data, true)
+            .expect("feed failed");
 
         // Verify: Parquet file structure
         // Format: MAGIC (4B) | RowGroups | Footer | FooterLength (4B) | MAGIC (4B)
         assert!(!chunks.is_empty(), "Should produce at least one chunk");
 
         for chunk in chunks {
-            assert!(chunk.len() >= 12, "Parquet file must have at least 12 bytes (magic + footer_length + magic)");
+            assert!(
+                chunk.len() >= 12,
+                "Parquet file must have at least 12 bytes (magic + footer_length + magic)"
+            );
 
             // Check magic at start
-            assert_eq!(&chunk[0..4], PARQUET_MAGIC, "File must start with PAR1 magic");
+            assert_eq!(
+                &chunk[0..4],
+                PARQUET_MAGIC,
+                "File must start with PAR1 magic"
+            );
 
             // Check magic at end (last 4 bytes)
             let end_idx = chunk.len() - 4;
-            assert_eq!(&chunk[end_idx..], PARQUET_MAGIC, "File must end with PAR1 magic");
+            assert_eq!(
+                &chunk[end_idx..],
+                PARQUET_MAGIC,
+                "File must end with PAR1 magic"
+            );
 
             // Verify footer length is reasonable (between 100 bytes and 10 MB)
             // Footer length is stored in the last 8 bytes before the final magic (little-endian)
@@ -59,7 +76,7 @@ mod parquet_footer_tests {
             let expected_footer_start = chunk.len() - footer_len - 8;
             assert!(
                 expected_footer_start > 4,
-                "Footer must start after initial magic ({})", 
+                "Footer must start after initial magic ({})",
                 expected_footer_start
             );
         }
@@ -84,17 +101,35 @@ mod parquet_footer_tests {
             compression: ParquetCompression::Uncompressed,
         };
 
-        converter.begin_csv_to_parquet(csv_opts, pq_opts, None).expect("begin failed");
-        let chunks = converter.feed_csv_chunk(csv_data.as_bytes(), true).expect("feed failed");
+        converter
+            .begin_csv_to_parquet(csv_opts, pq_opts, None)
+            .expect("begin failed");
+        let chunks = converter
+            .feed_csv_chunk(csv_data.as_bytes(), true)
+            .expect("feed failed");
 
         // With 3000 rows and row_group_size=1000, we expect 3 chunks
         assert_eq!(chunks.len(), 3, "Should produce 3 row groups");
 
         // Verify each chunk is a valid Parquet file
         for (idx, chunk) in chunks.iter().enumerate() {
-            assert!(chunk.len() > 12, "Chunk {} must have proper Parquet structure", idx);
-            assert_eq!(&chunk[0..4], PARQUET_MAGIC, "Chunk {} starts with magic", idx);
-            assert_eq!(&chunk[chunk.len()-4..], PARQUET_MAGIC, "Chunk {} ends with magic", idx);
+            assert!(
+                chunk.len() > 12,
+                "Chunk {} must have proper Parquet structure",
+                idx
+            );
+            assert_eq!(
+                &chunk[0..4],
+                PARQUET_MAGIC,
+                "Chunk {} starts with magic",
+                idx
+            );
+            assert_eq!(
+                &chunk[chunk.len() - 4..],
+                PARQUET_MAGIC,
+                "Chunk {} ends with magic",
+                idx
+            );
 
             println!("Chunk {} size: {} bytes", idx, chunk.len());
         }
@@ -116,8 +151,12 @@ mod parquet_footer_tests {
             compression: ParquetCompression::Uncompressed,
         };
 
-        converter.begin_csv_to_parquet(csv_opts, pq_opts, None).expect("begin failed");
-        let chunks = converter.feed_csv_chunk(csv_data, true).expect("feed failed");
+        converter
+            .begin_csv_to_parquet(csv_opts, pq_opts, None)
+            .expect("begin failed");
+        let chunks = converter
+            .feed_csv_chunk(csv_data, true)
+            .expect("feed failed");
 
         assert!(!chunks.is_empty(), "Should produce output");
 

@@ -223,3 +223,31 @@ fn test_batch_preserves_sku_order() {
     // Second row should be SKU-A (second seen)
     assert_eq!(sku_ids.value(1), "SKU-A");
 }
+
+#[test]
+fn test_batch_duplicate_time_indices_same_sku() {
+    // Test that duplicate time indices for same SKU doesn't cause issues
+    // The current implementation just appends demand values regardless of time_index
+    let ipc = make_batch_ipc(vec![
+        ("SKU-A", 0.0, 100.0),
+        ("SKU-A", 0.0, 105.0), // duplicate time 0.0
+        ("SKU-A", 1.0, 110.0),
+        ("SKU-A", 1.0, 115.0), // duplicate time 1.0
+    ]);
+    let result = run_batch_prediction(&ipc, 1, PredictionMode::Linear);
+
+    // Should succeed - it treats all 4 values as a sequence
+    assert!(result.is_ok(), "Should handle duplicate time indices");
+
+    let mut reader = StreamReader::try_new(Cursor::new(result.unwrap()), None).unwrap();
+    let batch = reader.next().unwrap().unwrap();
+
+    let err_codes = batch
+        .column(3)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .unwrap();
+
+    // Should be a success row (error_code is null)
+    assert!(err_codes.is_null(0));
+}

@@ -23,7 +23,11 @@ pub enum ConvertError {
     /// Invalid schema or schema hint
     InvalidSchema { reason: String },
     /// Type conversion failed (when schema hint is provided)
-    TypeConversionFailed { column: String, value: String, target_type: String },
+    TypeConversionFailed {
+        column: String,
+        value: String,
+        target_type: String,
+    },
     /// Internal error (should not happen)
     InternalError { reason: String },
 }
@@ -87,9 +91,17 @@ impl fmt::Display for ConvertError {
                 write!(f, "InvalidState: {}. Fix: Check call sequence.", reason)
             }
             Self::InvalidSchema { reason } => {
-                write!(f, "InvalidSchema: {}. Fix: Verify schema hint matches CSV.", reason)
+                write!(
+                    f,
+                    "InvalidSchema: {}. Fix: Verify schema hint matches CSV.",
+                    reason
+                )
             }
-            Self::TypeConversionFailed { column, value, target_type } => {
+            Self::TypeConversionFailed {
+                column,
+                value,
+                target_type,
+            } => {
                 write!(
                     f,
                     "TypeConversionFailed: Cannot convert '{}' to {} for column '{}'. \

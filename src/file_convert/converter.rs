@@ -138,9 +138,12 @@ impl Converter {
         }
 
         // Get mutable reference to Excel parser
-        let excel_parser = self.excel_parser.as_mut().ok_or(ConvertError::InvalidState {
-            reason: "Excel parser not initialized".to_string(),
-        })?;
+        let excel_parser = self
+            .excel_parser
+            .as_mut()
+            .ok_or(ConvertError::InvalidState {
+                reason: "Excel parser not initialized".to_string(),
+            })?;
 
         // Rebuild Parquet schema from Excel header (same pattern as CSV)
         // Must happen before any rows are added to the builder
@@ -151,7 +154,10 @@ impl Converter {
                 let fields = pb.arrow_schema().fields();
                 needs_rebuild = !fields.is_empty()
                     && fields[0].name().starts_with("col_")
-                    && fields.iter().enumerate().all(|(i, f)| f.name() == &format!("col_{}", i));
+                    && fields
+                        .iter()
+                        .enumerate()
+                        .all(|(i, f)| f.name() == &format!("col_{}", i));
             }
 
             if needs_rebuild {
@@ -294,19 +300,25 @@ impl Converter {
         // Update schema based on CSV header when first inferred
         if csv_parser.schema_inferred() && self.parquet_builder.is_some() {
             let mut needs_rebuild = false;
-            
+
             // Check if builder still has placeholder schema
             if let Some(pb) = self.parquet_builder.as_ref() {
                 let fields = pb.arrow_schema().fields();
-                needs_rebuild = fields.len() > 0 
+                needs_rebuild = fields.len() > 0
                     && fields[0].name().starts_with("col_")
-                    && fields.iter().enumerate().all(|(i, f)| f.name() == &format!("col_{}", i));
+                    && fields
+                        .iter()
+                        .enumerate()
+                        .all(|(i, f)| f.name() == &format!("col_{}", i));
             }
 
             if needs_rebuild {
                 // Get the inferred column names
-                let col_names = csv_parser.inferred_columns().map(|v| v.clone()).unwrap_or_default();
-                
+                let col_names = csv_parser
+                    .inferred_columns()
+                    .map(|v| v.clone())
+                    .unwrap_or_default();
+
                 // Extract parquet options from current builder
                 let opts = if let Some(pb) = self.parquet_builder.take() {
                     ParquetWriteOptions {
@@ -435,7 +447,9 @@ mod tests {
         let csv_opts = CsvReadOptions::default();
         let pq_opts = ParquetWriteOptions::default();
 
-        converter.begin_csv_to_parquet(csv_opts, pq_opts, None).unwrap();
+        converter
+            .begin_csv_to_parquet(csv_opts, pq_opts, None)
+            .unwrap();
         let chunks = converter.feed_csv_chunk(csv_data, true).unwrap();
 
         // Should produce some Parquet output
@@ -460,7 +474,9 @@ mod tests {
 
         // Should be able to start new session
         assert_eq!(converter.state(), ConversionState::Idle);
-        converter.begin_csv_to_parquet(csv_opts, pq_opts, None).unwrap();
+        converter
+            .begin_csv_to_parquet(csv_opts, pq_opts, None)
+            .unwrap();
         assert_eq!(converter.state(), ConversionState::CsvToParquet);
     }
 

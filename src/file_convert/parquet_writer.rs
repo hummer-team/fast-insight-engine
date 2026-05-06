@@ -1,6 +1,6 @@
 /// Parquet writer for DuckDB Wasm compatibility
 /// Generates complete, valid .parquet files with proper Parquet footer metadata
-/// 
+///
 /// # Overview
 /// Parquet file format: MAGIC (4B) | RowGroups | FileMetadata | MetadataLength (4B) | MAGIC (4B)
 /// This writer produces valid Parquet files that DuckDB Wasm can directly load.
@@ -73,7 +73,7 @@ impl ParquetBuilder {
     }
 
     /// Create a Parquet builder from schema hint (optional schema definition)
-    /// 
+    ///
     /// If schema_hint is provided: strict type conversion mode
     /// If schema_hint is None: lenient mode (all columns as Utf8, DuckDB will infer types)
     pub fn new_with_optional_schema(
@@ -82,8 +82,8 @@ impl ParquetBuilder {
         options: ParquetWriteOptions,
         memory_limit_mb: u32,
     ) -> ConvertResult<Self> {
-        use arrow::datatypes::DataType;
         use super::types::ColumnDef;
+        use arrow::datatypes::DataType;
 
         if options.row_group_size < 64 || options.row_group_size > 16384 {
             return Err(ConvertError::ParquetRowGroupTooLarge {
@@ -196,11 +196,9 @@ impl ParquetBuilder {
         let mut buffer = Vec::new();
 
         {
-            let mut writer =
-                ArrowWriter::try_new(&mut buffer, Arc::clone(&self.schema), None).map_err(|e| {
-                    ConvertError::InternalError {
-                        reason: format!("Failed to create ArrowWriter: {}", e),
-                    }
+            let mut writer = ArrowWriter::try_new(&mut buffer, Arc::clone(&self.schema), None)
+                .map_err(|e| ConvertError::InternalError {
+                    reason: format!("Failed to create ArrowWriter: {}", e),
                 })?;
 
             writer
@@ -246,7 +244,7 @@ impl ParquetBuilder {
     }
 
     /// Convert rows to Arrow arrays based on schema
-    /// 
+    ///
     /// # Data Type Handling
     /// This method automatically infers and converts CSV string values to appropriate types:
     /// - **Utf8**: Stored as-is (fallback for unparseable values)
@@ -259,7 +257,7 @@ impl ParquetBuilder {
     ///   * Query performance: No per-query conversion overhead
     ///   * Memory efficiency: Int64 uses less space than "123" as Utf8
     ///   * Faster aggregations: Numeric operations directly on typed data
-    /// 
+    ///
     /// Empty strings are converted to NULL for all types (standard behavior).
     fn rows_to_arrays(&self, rows: &[Vec<String>]) -> ConvertResult<Vec<Arc<dyn Array>>> {
         let mut arrays: Vec<Arc<dyn Array>> = Vec::new();
@@ -273,7 +271,7 @@ impl ParquetBuilder {
     }
 
     /// Convert a single column to Arrow array
-    /// 
+    ///
     /// In strict mode (with schema hint): converts to specified type, fails if parse fails
     /// In lenient mode (no schema hint): keeps as Utf8, DuckDB will infer types
     fn column_to_array(
@@ -288,13 +286,8 @@ impl ParquetBuilder {
                 let values: Vec<Option<&str>> = rows
                     .iter()
                     .map(|row| {
-                        row.get(col_idx).and_then(|s| {
-                            if s.is_empty() {
-                                None
-                            } else {
-                                Some(s.as_str())
-                            }
-                        })
+                        row.get(col_idx)
+                            .and_then(|s| if s.is_empty() { None } else { Some(s.as_str()) })
                     })
                     .collect();
 
@@ -303,7 +296,7 @@ impl ParquetBuilder {
             DataType::Int64 => {
                 // Strict mode: parse to Int64, fail if conversion fails
                 let mut int_values = Vec::new();
-                
+
                 for row in rows {
                     if let Some(s) = row.get(col_idx) {
                         if s.is_empty() {
@@ -343,14 +336,11 @@ impl ParquetBuilder {
                     .collect();
 
                 // Check for conversion failures
-                let has_failure = rows
-                    .iter()
-                    .zip(values.iter())
-                    .any(|(row, parsed)| {
-                        row.get(col_idx)
-                            .map(|s| !s.is_empty() && parsed.is_none())
-                            .unwrap_or(false)
-                    });
+                let has_failure = rows.iter().zip(values.iter()).any(|(row, parsed)| {
+                    row.get(col_idx)
+                        .map(|s| !s.is_empty() && parsed.is_none())
+                        .unwrap_or(false)
+                });
 
                 if has_failure {
                     // Find first failed value
@@ -391,7 +381,7 @@ impl ParquetBuilder {
                                         column: field.name().to_string(),
                                         value: s.clone(),
                                         target_type: "Boolean".to_string(),
-                                    })
+                                    });
                                 }
                             }
                         }

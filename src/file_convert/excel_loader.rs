@@ -2,7 +2,6 @@
 ///
 /// Supports reading Excel files (.xlsx, .xls) via calamine crate
 /// with configurable string table size limits and memory management.
-
 use super::error::{ConvertError, ConvertResult};
 use super::types::ExcelLoadOptions;
 use arrow::datatypes::{DataType, Field, Schema};

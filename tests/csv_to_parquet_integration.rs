@@ -19,7 +19,9 @@ fn test_integration_basic_conversion() {
     let csv_opts = CsvReadOptions::default();
     let pq_opts = ParquetWriteOptions::default();
 
-    converter.begin_csv_to_parquet(csv_opts, pq_opts, None).unwrap();
+    converter
+        .begin_csv_to_parquet(csv_opts, pq_opts, None)
+        .unwrap();
     let chunks = converter.feed_csv_chunk(csv_data, true).unwrap();
 
     // Should produce Parquet output
@@ -52,7 +54,9 @@ fn test_integration_chunked_input() {
     let csv_opts = CsvReadOptions::default();
     let pq_opts = ParquetWriteOptions::default();
 
-    converter.begin_csv_to_parquet(csv_opts, pq_opts, None).unwrap();
+    converter
+        .begin_csv_to_parquet(csv_opts, pq_opts, None)
+        .unwrap();
 
     // Feed first chunk (is_last = false)
     let chunks1 = converter.feed_csv_chunk(chunk1, false).unwrap();
@@ -82,7 +86,9 @@ fn test_integration_no_header() {
     csv_opts.has_header = false;
     let pq_opts = ParquetWriteOptions::default();
 
-    converter.begin_csv_to_parquet(csv_opts, pq_opts, None).unwrap();
+    converter
+        .begin_csv_to_parquet(csv_opts, pq_opts, None)
+        .unwrap();
     let chunks = converter.feed_csv_chunk(csv_data, true).unwrap();
 
     assert!(!chunks.is_empty(), "Should convert CSV without header");
@@ -110,7 +116,9 @@ fn test_integration_empty_input() {
     let csv_opts = CsvReadOptions::default();
     let pq_opts = ParquetWriteOptions::default();
 
-    converter.begin_csv_to_parquet(csv_opts, pq_opts, None).unwrap();
+    converter
+        .begin_csv_to_parquet(csv_opts, pq_opts, None)
+        .unwrap();
     let chunks = converter.feed_csv_chunk(csv_data, true).unwrap();
 
     // Should handle empty data gracefully
@@ -129,7 +137,9 @@ fn test_integration_custom_delimiter() {
     csv_opts.delimiter = b'\t';
     let pq_opts = ParquetWriteOptions::default();
 
-    converter.begin_csv_to_parquet(csv_opts, pq_opts, None).unwrap();
+    converter
+        .begin_csv_to_parquet(csv_opts, pq_opts, None)
+        .unwrap();
     let chunks = converter.feed_csv_chunk(csv_data, true).unwrap();
 
     assert!(!chunks.is_empty(), "Should handle custom delimiter");
@@ -147,7 +157,9 @@ fn test_integration_quoted_fields() {
     let csv_opts = CsvReadOptions::default();
     let pq_opts = ParquetWriteOptions::default();
 
-    converter.begin_csv_to_parquet(csv_opts, pq_opts, None).unwrap();
+    converter
+        .begin_csv_to_parquet(csv_opts, pq_opts, None)
+        .unwrap();
     let chunks = converter.feed_csv_chunk(csv_data, true).unwrap();
 
     assert!(!chunks.is_empty(), "Should handle quoted fields");
@@ -165,7 +177,9 @@ fn test_integration_memory_limit() {
     let csv_opts = CsvReadOptions::default();
     let pq_opts = ParquetWriteOptions::default();
 
-    converter.begin_csv_to_parquet(csv_opts, pq_opts, None).unwrap();
+    converter
+        .begin_csv_to_parquet(csv_opts, pq_opts, None)
+        .unwrap();
 
     // Small CSV should fit in 1 MB
     let chunks = converter.feed_csv_chunk(csv_data, true).unwrap();
@@ -190,7 +204,9 @@ fn test_integration_large_dataset_simulation() {
     let csv_opts = CsvReadOptions::default();
     let pq_opts = ParquetWriteOptions::default();
 
-    converter.begin_csv_to_parquet(csv_opts, pq_opts, None).unwrap();
+    converter
+        .begin_csv_to_parquet(csv_opts, pq_opts, None)
+        .unwrap();
     let chunks = converter.feed_csv_chunk(&csv_data, true).unwrap();
 
     assert!(!chunks.is_empty(), "Should handle larger datasets");
@@ -218,7 +234,9 @@ fn test_integration_session_reuse() {
     converter.free();
 
     // Second session (reuse)
-    converter.begin_csv_to_parquet(csv_opts, pq_opts, None).unwrap();
+    converter
+        .begin_csv_to_parquet(csv_opts, pq_opts, None)
+        .unwrap();
     let chunks2 = converter.feed_csv_chunk(csv_data, true).unwrap();
     assert!(!chunks2.is_empty());
 
@@ -236,7 +254,9 @@ fn test_integration_whitespace_handling() {
     let csv_opts = CsvReadOptions::default();
     let pq_opts = ParquetWriteOptions::default();
 
-    converter.begin_csv_to_parquet(csv_opts, pq_opts, None).unwrap();
+    converter
+        .begin_csv_to_parquet(csv_opts, pq_opts, None)
+        .unwrap();
     let chunks = converter.feed_csv_chunk(csv_data, true).unwrap();
 
     assert!(!chunks.is_empty(), "Should handle whitespace in fields");
@@ -251,7 +271,7 @@ fn test_integration_performance_benchmark() {
 
     let num_rows = 100_000;
     let mut csv_data = String::from("col1,col2,col3\n");
-    
+
     for i in 0..num_rows {
         csv_data.push_str(&format!("Row{},{},{:.2}\n", i, i * 10, i as f64 * 1.5));
     }
@@ -264,7 +284,9 @@ fn test_integration_performance_benchmark() {
     let mut pq_opts = ParquetWriteOptions::default();
     pq_opts.row_group_size = 4096; // Larger row groups for better performance
 
-    converter.begin_csv_to_parquet(csv_opts, pq_opts, None).unwrap();
+    converter
+        .begin_csv_to_parquet(csv_opts, pq_opts, None)
+        .unwrap();
 
     let start = Instant::now();
     let chunks = converter.feed_csv_chunk(csv_bytes, true).unwrap();
@@ -284,6 +306,9 @@ fn test_integration_performance_benchmark() {
     if throughput_mbps >= 20.0 {
         println!("  ✓ Throughput goal (≥20 MB/s) achieved!");
     } else {
-        println!("  ⚠ Throughput ({:.1} MB/s) below goal (≥20 MB/s)", throughput_mbps);
+        println!(
+            "  ⚠ Throughput ({:.1} MB/s) below goal (≥20 MB/s)",
+            throughput_mbps
+        );
     }
 }

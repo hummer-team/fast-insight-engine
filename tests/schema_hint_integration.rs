@@ -16,7 +16,11 @@ fn test_lenient_mode_no_schema_hint() {
 
     let mut converter = Converter::new();
     let chunks = converter
-        .begin_csv_to_parquet(CsvReadOptions::default(), ParquetWriteOptions::default(), None)
+        .begin_csv_to_parquet(
+            CsvReadOptions::default(),
+            ParquetWriteOptions::default(),
+            None,
+        )
         .and_then(|_| converter.feed_csv_chunk(csv, true))
         .expect("lenient mode should succeed");
 
@@ -37,7 +41,11 @@ fn test_strict_mode_int64_and_float64() {
 
     let mut converter = Converter::new();
     let chunks = converter
-        .begin_csv_to_parquet(CsvReadOptions::default(), ParquetWriteOptions::default(), Some(&hint))
+        .begin_csv_to_parquet(
+            CsvReadOptions::default(),
+            ParquetWriteOptions::default(),
+            Some(&hint),
+        )
         .and_then(|_| converter.feed_csv_chunk(csv, true))
         .expect("strict mode with valid data should succeed");
 
@@ -56,7 +64,11 @@ fn test_strict_mode_boolean() {
 
     let mut converter = Converter::new();
     let chunks = converter
-        .begin_csv_to_parquet(CsvReadOptions::default(), ParquetWriteOptions::default(), Some(&hint))
+        .begin_csv_to_parquet(
+            CsvReadOptions::default(),
+            ParquetWriteOptions::default(),
+            Some(&hint),
+        )
         .and_then(|_| converter.feed_csv_chunk(csv, true))
         .expect("strict boolean mode should accept true/false/1");
 
@@ -75,7 +87,11 @@ fn test_strict_mode_all_utf8() {
 
     let mut converter = Converter::new();
     let chunks = converter
-        .begin_csv_to_parquet(CsvReadOptions::default(), ParquetWriteOptions::default(), Some(&hint))
+        .begin_csv_to_parquet(
+            CsvReadOptions::default(),
+            ParquetWriteOptions::default(),
+            Some(&hint),
+        )
         .and_then(|_| converter.feed_csv_chunk(csv, true))
         .expect("strict utf8 mode should succeed");
 
@@ -96,11 +112,18 @@ fn test_strict_mode_int64_parse_failure() {
 
     let mut converter = Converter::new();
     converter
-        .begin_csv_to_parquet(CsvReadOptions::default(), ParquetWriteOptions::default(), Some(&hint))
+        .begin_csv_to_parquet(
+            CsvReadOptions::default(),
+            ParquetWriteOptions::default(),
+            Some(&hint),
+        )
         .unwrap();
     let result = converter.feed_csv_chunk(csv, true);
 
-    assert!(result.is_err(), "Should fail when Int64 column has non-numeric value");
+    assert!(
+        result.is_err(),
+        "Should fail when Int64 column has non-numeric value"
+    );
     let err_msg = result.unwrap_err().to_string();
     assert!(
         err_msg.contains("TypeConversionFailed") || err_msg.contains("not_a_number"),
@@ -118,7 +141,11 @@ fn test_strict_mode_float64_parse_failure() {
 
     let mut converter = Converter::new();
     converter
-        .begin_csv_to_parquet(CsvReadOptions::default(), ParquetWriteOptions::default(), Some(&hint))
+        .begin_csv_to_parquet(
+            CsvReadOptions::default(),
+            ParquetWriteOptions::default(),
+            Some(&hint),
+        )
         .unwrap();
     let result = converter.feed_csv_chunk(csv, true);
 
@@ -134,7 +161,11 @@ fn test_strict_mode_boolean_parse_failure() {
 
     let mut converter = Converter::new();
     converter
-        .begin_csv_to_parquet(CsvReadOptions::default(), ParquetWriteOptions::default(), Some(&hint))
+        .begin_csv_to_parquet(
+            CsvReadOptions::default(),
+            ParquetWriteOptions::default(),
+            Some(&hint),
+        )
         .unwrap();
     let result = converter.feed_csv_chunk(csv, true);
 
@@ -157,7 +188,11 @@ fn test_strict_mode_column_count_mismatch() {
 
     let mut converter = Converter::new();
     converter
-        .begin_csv_to_parquet(CsvReadOptions::default(), ParquetWriteOptions::default(), Some(&hint))
+        .begin_csv_to_parquet(
+            CsvReadOptions::default(),
+            ParquetWriteOptions::default(),
+            Some(&hint),
+        )
         .unwrap();
     let result = converter.feed_csv_chunk(csv, true);
 
@@ -189,7 +224,10 @@ fn test_schema_hint_deserializes_from_json() {
 fn test_schema_hint_rejects_unknown_fields() {
     let json = r#"{"columns":[{"name":"id","type_id":1}],"unknown_field":"value"}"#;
     let result: Result<SchemaHint, _> = serde_json::from_str(json);
-    assert!(result.is_err(), "Unknown fields should be rejected with deny_unknown_fields");
+    assert!(
+        result.is_err(),
+        "Unknown fields should be rejected with deny_unknown_fields"
+    );
     println!("✓ SchemaHint correctly rejects unknown JSON fields");
 }
 
@@ -197,7 +235,10 @@ fn test_schema_hint_rejects_unknown_fields() {
 fn test_column_def_rejects_unknown_fields() {
     let json = r#"{"columns":[{"name":"id","type_id":1,"extra":"oops"}]}"#;
     let result: Result<SchemaHint, _> = serde_json::from_str(json);
-    assert!(result.is_err(), "Unknown fields in ColumnDef should be rejected");
+    assert!(
+        result.is_err(),
+        "Unknown fields in ColumnDef should be rejected"
+    );
     println!("✓ ColumnDef correctly rejects unknown JSON fields");
 }
 
@@ -218,7 +259,11 @@ fn test_schema_hint_unsupported_type_id_defaults_to_utf8() {
 
     let mut converter = Converter::new();
     let chunks = converter
-        .begin_csv_to_parquet(CsvReadOptions::default(), ParquetWriteOptions::default(), Some(&hint))
+        .begin_csv_to_parquet(
+            CsvReadOptions::default(),
+            ParquetWriteOptions::default(),
+            Some(&hint),
+        )
         .and_then(|_| converter.feed_csv_chunk(csv, true))
         .expect("unsupported type_id should silently default to Utf8");
 

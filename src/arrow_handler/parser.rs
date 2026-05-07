@@ -279,6 +279,131 @@ fn extract_float64_value(array: &ArrayRef, index: usize) -> Result<f64, Analysis
     Ok(float_array.value(index))
 }
 
+/// Parsed transaction data for FP-Growth algorithm.
+pub struct ParsedTransactions {
+    /// Transactions encoded as sequences of u32 item indices.
+    pub transactions: Vec<Vec<u32>>,
+    /// Lookup table: index → item name string.
+    pub item_names: Vec<String>,
+}
+
+/// Parse Arrow IPC Stream data for FP-Growth transaction mining.
+///
+/// # Input schema
+/// - `order_id`: `Utf8` — transaction/order identifier
+/// - `item_id`: `Utf8` — product/item identifier
+///
+/// Rows are grouped by `order_id`; each unique `order_id` becomes one transaction.
+/// Items are mapped to `u32` indices internally for algorithm efficiency.
+///
+/// # Arguments
+/// * `data` - Arrow IPC Stream format bytes
+///
+/// # Returns
+/// * `Ok(ParsedTransactions)` — transactions as index sequences + item name table
+/// * `Err(AnalysisError)` — if parsing fails or schema is invalid
+pub fn parse_transaction_ipc(data: &[u8]) -> Result<ParsedTransactions, AnalysisError> {
+    if data.is_empty() {
+        return Err(AnalysisError::ArrowError("empty input data".to_string()));
+    }
+
+    let cursor = Cursor::new(data);
+    let reader = StreamReader::try_new(cursor, None).map_err(|e| {
+        AnalysisError::ArrowError(format!("failed to create StreamReader: {}", e))
+    })?;
+
+    // Collect (order_id, item_id) rows; preserve first-seen insertion order.
+    let mut order_keys: Vec<String> = Vec::new();
+    let mut order_map: std::collections::HashMap<String, Vec<String>> =
+        std::collections::HashMap::new();
+
+    for batch_result in reader {
+        let batch = batch_result
+            .map_err(|e| AnalysisError::ArrowError(format!("failed to read batch: {}", e)))?;
+
+        if batch.num_columns() < 2 {
+            return Err(AnalysisError::ValidationError(
+                "transaction input requires at least 2 columns: order_id (Utf8), item_id (Utf8)"
+                    .to_string(),
+            ));
+        }
+
+        let schema = batch.schema();
+        if !matches!(schema.field(0).data_type(), DataType::Utf8) {
+            return Err(AnalysisError::ValidationError(format!(
+                "order_id column (col 0) must be Utf8, got {:?}",
+                schema.field(0).data_type()
+            )));
+        }
+        if !matches!(schema.field(1).data_type(), DataType::Utf8) {
+            return Err(AnalysisError::ValidationError(format!(
+                "item_id column (col 1) must be Utf8, got {:?}",
+                schema.field(1).data_type()
+            )));
+        }
+
+        let order_col = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .ok_or_else(|| {
+                AnalysisError::ArrowError("order_id column is not StringArray".to_string())
+            })?;
+        let item_col = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .ok_or_else(|| {
+                AnalysisError::ArrowError("item_id column is not StringArray".to_string())
+            })?;
+
+        for i in 0..batch.num_rows() {
+            let order_id = order_col.value(i).to_string();
+            let item_id = item_col.value(i).to_string();
+            if !order_map.contains_key(&order_id) {
+                order_keys.push(order_id.clone());
+            }
+            order_map.entry(order_id).or_default().push(item_id);
+        }
+    }
+
+    if order_keys.is_empty() {
+        return Err(AnalysisError::ValidationError(
+            "no transaction rows found in input data".to_string(),
+        ));
+    }
+
+    // Map item strings to u32 indices; assign indices in first-seen order.
+    let mut item_index: std::collections::HashMap<String, u32> =
+        std::collections::HashMap::new();
+    let mut item_names: Vec<String> = Vec::new();
+
+    let transactions: Vec<Vec<u32>> = order_keys
+        .iter()
+        .filter_map(|oid| order_map.get(oid))
+        .map(|items| {
+            items
+                .iter()
+                .map(|item| {
+                    if let Some(&idx) = item_index.get(item) {
+                        idx
+                    } else {
+                        let idx = item_names.len() as u32;
+                        item_index.insert(item.clone(), idx);
+                        item_names.push(item.clone());
+                        idx
+                    }
+                })
+                .collect()
+        })
+        .collect();
+
+    Ok(ParsedTransactions {
+        transactions,
+        item_names,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -10,13 +10,15 @@ use wasm_bindgen::prelude::*;
 pub mod arrow_handler;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod file_convert;
+pub mod fp_growth;
 pub mod gpu;
 pub mod insight_core;
 pub mod utils;
 
 use arrow_handler::{
     SkuPredictionResult, build_anomaly_result, build_batch_regression_result, build_cluster_result,
-    build_regression_result, parse_arrow_ipc, parse_batch_arrow_ipc,
+    build_pattern_result, build_regression_result, parse_arrow_ipc, parse_batch_arrow_ipc,
+    parse_transaction_ipc,
 };
 use insight_core::{
     PredictionMode, run_isolation_forest, run_kmeans, run_linear_regression,
@@ -680,6 +682,85 @@ fn split_analysis_error(e: &AnalysisError) -> (String, String) {
     } else {
         ("ModelError".to_string(), s)
     }
+}
+
+/// Find frequent product association patterns using the FP-Growth algorithm.
+///
+/// Typical use case: market basket analysis — discover which products are
+/// frequently purchased together in order to drive cross-selling recommendations.
+///
+/// # Input schema (Arrow IPC Stream)
+/// Two required columns (one row per item per order):
+/// - `order_id`: `Utf8` — transaction/order identifier
+/// - `item_id`: `Utf8` — product/item identifier
+///
+/// # Output schema (Arrow IPC Stream)
+/// - `pattern`: `List<Utf8>` — frequent itemset (e.g. `["milk", "bread"]`)
+/// - `support`: `Int64` — number of transactions that contain the itemset
+///
+/// # Arguments
+/// * `data` - Arrow IPC Stream bytes (Uint8Array from TypeScript)
+/// * `min_support` - Minimum transaction count a pattern must appear in (must be ≥ 1)
+///
+/// # Returns
+/// * `Ok(Uint8Array)` - Arrow IPC Stream with frequent patterns (may be zero rows)
+/// * `Err(JsError)` - Validation or parsing error
+///
+/// # Performance
+/// - Suitable for datasets up to ~100k order-item rows in the browser.
+/// - For large catalogs, run in a Web Worker to avoid blocking the UI thread.
+#[wasm_bindgen]
+pub async fn find_association_patterns(
+    data: &[u8],
+    min_support: u32,
+) -> Result<Vec<u8>, JsError> {
+    if min_support == 0 {
+        return Err(JsError::new(
+            "ValidationError: min_support must be >= 1",
+        ));
+    }
+
+    // Parse Arrow IPC → grouped transactions
+    let parsed =
+        parse_transaction_ipc(data).map_err(|e| JsError::new(&e.to_string()))?;
+
+    if parsed.transactions.is_empty() {
+        return Err(JsError::new(
+            "ValidationError: no transactions found in input data",
+        ));
+    }
+
+    console_log!(
+        "find_association_patterns: {} transactions, {} distinct items, min_support={}",
+        parsed.transactions.len(),
+        parsed.item_names.len(),
+        min_support
+    );
+
+    // Run FP-Growth on u32-indexed transactions
+    let fp = fp_growth::FPGrowth::<u32>::new(parsed.transactions, min_support as usize);
+    let fp_result = fp.find_frequent_patterns();
+
+    console_log!(
+        "find_association_patterns: {} frequent patterns found",
+        fp_result.frequent_patterns_num()
+    );
+
+    // Map u32 indices back to item name strings
+    let patterns: Vec<(Vec<String>, usize)> = fp_result
+        .frequent_patterns()
+        .into_iter()
+        .map(|(pattern, support)| {
+            let named: Vec<String> = pattern
+                .into_iter()
+                .filter_map(|idx| parsed.item_names.get(idx as usize).cloned())
+                .collect();
+            (named, support)
+        })
+        .collect();
+
+    // Serialize to Arrow IPC
+    build_pattern_result(patterns).map_err(|e| JsError::new(&e.to_string()))
 }
 
 /// Get Wasm module version for compatibility checking

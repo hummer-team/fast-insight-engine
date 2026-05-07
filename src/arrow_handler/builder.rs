@@ -260,6 +260,52 @@ fn serialize_to_ipc(schema: Arc<Schema>, batch: RecordBatch) -> Result<Vec<u8>, 
     Ok(buffer)
 }
 
+/// Build Arrow IPC result for FP-Growth frequent pattern mining.
+///
+/// # Output schema
+/// - `pattern`: `List<Utf8>` — frequent itemset (e.g., `["milk", "bread"]`)
+/// - `support`: `Int64` — number of transactions containing the pattern
+///
+/// An empty `patterns` slice produces a valid zero-row Arrow IPC result.
+///
+/// # Arguments
+/// * `patterns` - Frequent patterns with support counts (from `FPResult::frequent_patterns()`).
+///
+/// # Returns
+/// * `Ok(Vec<u8>)` - Arrow IPC Stream format bytes
+/// * `Err(AnalysisError)` - If Arrow serialization fails
+pub fn build_pattern_result(
+    patterns: Vec<(Vec<String>, usize)>,
+) -> Result<Vec<u8>, AnalysisError> {
+    use arrow::array::{Int64Array, ListBuilder, StringBuilder};
+
+    // Build List<Utf8> array for pattern column.
+    let mut list_builder = ListBuilder::new(StringBuilder::new());
+    let mut supports: Vec<i64> = Vec::with_capacity(patterns.len());
+
+    for (pattern, support) in &patterns {
+        for item in pattern {
+            list_builder.values().append_value(item);
+        }
+        list_builder.append(true);
+        supports.push(*support as i64);
+    }
+
+    let pattern_array = Arc::new(list_builder.finish()) as ArrayRef;
+    let support_array = Arc::new(Int64Array::from(supports)) as ArrayRef;
+
+    // Derive schema from the built array to guarantee field-name consistency.
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("pattern", pattern_array.data_type().clone(), false),
+        Field::new("support", DataType::Int64, false),
+    ]));
+
+    let batch = RecordBatch::try_new(schema.clone(), vec![pattern_array, support_array])
+        .map_err(|e| AnalysisError::ArrowError(format!("failed to create RecordBatch: {}", e)))?;
+
+    serialize_to_ipc(schema, batch)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

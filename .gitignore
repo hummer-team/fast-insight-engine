@@ -30,5 +30,4 @@ pkg
 ts_build.md
 TS_INTEGRATION.md
 _rule_md
-docs/*
-!docs/fp_growth.md
+docs
